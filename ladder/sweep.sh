@@ -70,10 +70,10 @@ for lr in $LRS; do
     common=(CONFIG="$CONFIG" OPT="$OPT" LR="$lr")
     stop=()
     if [ "$UPTO" != "$C_TPP_MAX" ]; then stop=(STOP_TPP="$UPTO"); fi
-    jid=$(submit "$STABLE_TIME" "${CONFIG}-lr${lr}-main" "" "${common[@]}" MODE=stable ${stop[@]+"${stop[@]}"})
+    jid=$(submit "$STABLE_TIME" "${CONFIG}-${OPT}-lr${lr}-main" "" "${common[@]}" MODE=stable ${stop[@]+"${stop[@]}"})
     echo "   lr $lr: stable job $jid"
     for t in ${BRANCHES[@]+"${BRANCHES[@]}"}; do
-        bid=$(submit "$BRANCH_TIME" "${CONFIG}-lr${lr}-tpp${t}" "$jid" "${common[@]}" MODE=branch TPP="$t")
+        bid=$(submit "$BRANCH_TIME" "${CONFIG}-${OPT}-lr${lr}-tpp${t}" "$jid" "${common[@]}" MODE=branch TPP="$t")
         echo "            TPP$t branch job $bid (after $jid)"
     done
 done
