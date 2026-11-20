@@ -25,9 +25,7 @@ python ladder/data/inspect_indexed.py $OUT/climbmix_v1_m1/val_all/val --tokenize
 
 # Slurm CPU 提交：在跳板机激活 megatron 环境，进入共享的 Megatron-LM 仓库根目录，
 # 将下面的 sbatch 命令复制到终端执行。申请的 CPU 数与上面的 WORKERS 对齐。
-: <<'SLURM_EXAMPLE'
-sbatch --partition=polaris --job-name=prepare-m1 \
-    --nodes=1 --ntasks=1 --cpus-per-task=64 --mem=128G --time=04:00:00 \
-    --chdir="$PWD" --export=ALL --output="prepare-m1-%j.out" \
-    --wrap='srun --ntasks=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" bash -e ladder/data/prepare_dataset.sh'
-SLURM_EXAMPLE
+# sbatch --partition=polaris --job-name=prepare-m1 \
+#     --nodes=1 --ntasks=1 --cpus-per-task=64 --mem=128G --time=04:00:00 \
+#     --chdir="$PWD" --export=ALL --output="prepare-m1-%j.out" \
+#     --wrap='srun --ntasks=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" bash -e ladder/data/prepare_dataset.sh'
