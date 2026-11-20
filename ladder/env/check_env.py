@@ -2,17 +2,31 @@
 
 Prints versions, then checks: GPU / NCCL / bf16, Megatron Core import and the compiled dataset
 helper, TransformerEngine (a bf16 TE Linear forward/backward on GPU), Muon from emerging_optimizers
-as Megatron sees it, and optionally a HF tokenizer.
+as Megatron sees it, torch.compile through Triton, and optionally a HF tokenizer. The environment from
+ladder/env/cuda_env.sh is loaded first, as ladder/train.sh does.
 
     python ladder/env/check_env.py [--tokenizer /path/to/Llama-3.1-8B]
 """
 
 import argparse
 import importlib
+import os
+import subprocess
 import sys
 import traceback
 
 RESULTS = []
+CUDA_ENV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cuda_env.sh")
+
+
+def load_cuda_env():
+    """Apply the variables ladder/env/cuda_env.sh exports to this process."""
+    out = subprocess.run(["bash", "-c", 'source "$1" && env -0', "_", CUDA_ENV],
+                         check=True, capture_output=True).stdout
+    for item in out.split(b"\0"):
+        k, sep, v = item.decode().partition("=")
+        if sep and os.environ.get(k) != v:
+            os.environ[k] = v
 
 
 def check(name):
@@ -40,6 +54,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--tokenizer", default=None)
     args = p.parse_args()
+    load_cuda_env()
 
     print(f"python {sys.version.split()[0]}  ({sys.executable})")
     for mod in ["torch", "transformer_engine", "megatron.core", "emerging_optimizers", "apex",
@@ -73,19 +88,23 @@ def main():
         layer(x).float().pow(2).mean().backward()
         return "forward/backward ok"
 
-    @check("triton CUDA driver (needs cuda.h)")
+    @check("torch.compile via Triton (cuda.h, ptxas, libdevice)")
     def _():
-        # Builds triton's cuda_utils helper, the step torch.compile hits first (Megatron's jit warmup).
-        # Its gcc call only searches triton's own include dir, which the NGC image lacks; ladder/train.sh
-        # adds $CUDA_HOME/include to CPATH, so do the same here to check what training will see.
-        import os
+        # The path Megatron's jit warmup takes (bias_swiglu under torch.compile): builds triton's
+        # cuda_utils helper (needs cuda.h), hashes the backend (needs ptxas) and compiles a kernel.
+        # Run with the environment ladder/env/cuda_env.sh sets up, as train.sh does.
+        import torch
 
-        inc = os.path.join(os.environ.get("CUDA_HOME") or "/usr/local/cuda", "include")
-        if os.path.isfile(os.path.join(inc, "cuda.h")):
-            os.environ["CPATH"] = inc + (":" + os.environ["CPATH"] if os.environ.get("CPATH") else "")
-        from triton.runtime import driver
+        @torch.compile
+        def f(x):
+            return torch.nn.functional.silu(x) * torch.erf(x)
 
-        return f"{driver.active.get_current_target()}, CPATH={os.environ.get('CPATH', '')}"
+        x = torch.randn(4096, device="cuda", dtype=torch.bfloat16)
+        y = f(x)
+        ref = torch.nn.functional.silu(x.float()) * torch.erf(x.float())
+        assert torch.allclose(y.float(), ref, atol=2e-2, rtol=2e-2), "compiled result mismatch"
+        keys = ["CUDA_HOME", "CPATH", "TRITON_PTXAS_PATH", "TRITON_LIBDEVICE_PATH"]
+        return "ok; " + ", ".join(f"{k}={os.environ.get(k, '')}" for k in keys)
 
     @check("Muon available to Megatron")
     def _():
