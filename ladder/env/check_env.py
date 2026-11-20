@@ -73,6 +73,13 @@ def main():
         layer(x).float().pow(2).mean().backward()
         return "forward/backward ok"
 
+    @check("triton CUDA driver (needs cuda.h)")
+    def _():
+        # Builds triton's cuda_utils helper, the step torch.compile hits first (Megatron's jit warmup).
+        from triton.runtime import driver
+
+        return str(driver.active.get_current_target())
+
     @check("Muon available to Megatron")
     def _():
         mod = importlib.import_module("megatron.core.optimizer.emerging_optimizers")

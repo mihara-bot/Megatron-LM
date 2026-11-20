@@ -33,6 +33,10 @@ set -euo pipefail
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO"
 if [ -n "${VENV:-}" ]; then source "$VENV/bin/activate"; fi
+# Triton compiles a small C helper (cuda_utils.c) on first use, which includes cuda.h. It only looks in
+# its own triton/backends/nvidia/include, so add the CUDA toolkit's headers to gcc's search path.
+CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
+if [ -f "$CUDA_HOME/include/cuda.h" ]; then export CPATH="$CUDA_HOME/include${CPATH:+:$CPATH}"; fi
 
 : "${CONFIG:?set CONFIG, e.g. CONFIG=llama3_r1}"
 source "ladder/configs/${CONFIG}.sh"
