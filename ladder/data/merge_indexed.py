@@ -34,6 +34,10 @@ def main():
                       if os.path.abspath(os.path.splitext(f)[0]) != out_abs)
     if not prefixes:
         raise SystemExit(f"no .idx files match {args.input_glob} under {args.input_root}")
+    missing = [p for p in prefixes if not os.path.exists(p + ".json")]
+    if missing:
+        raise SystemExit(f"{len(missing)} pieces have no .json (incomplete?), e.g. {missing[0]}; "
+                         "re-run tokenize_dataset.py before merging")
 
     docs = tokens = nbytes = 0
     dtype = IndexedDataset(prefixes[0]).index.dtype
@@ -44,10 +48,11 @@ def main():
             raise SystemExit(f"{prefix} has a different dtype; were the pieces made with one tokenizer?")
         builder.add_index(prefix)
         stats_path = prefix + ".json"
-        if os.path.exists(stats_path):
-            with open(stats_path) as f:
-                s = json.load(f)
-            docs, tokens, nbytes = docs + s["docs"], tokens + s["tokens"], nbytes + s["bytes"]
+        if not os.path.exists(stats_path):
+            raise SystemExit(f"{stats_path} missing: {prefix} looks incomplete; re-run tokenize_dataset.py")
+        with open(stats_path) as f:
+            s = json.load(f)
+        docs, tokens, nbytes = docs + s["docs"], tokens + s["tokens"], nbytes + s["bytes"]
         if i % 100 == 0 or i == len(prefixes):
             print(f"[{i}/{len(prefixes)}] merged, {tokens / 1e9:.2f}B tokens so far", flush=True)
     builder.finalize(out_abs + ".idx")
