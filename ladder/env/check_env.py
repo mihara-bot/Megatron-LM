@@ -76,9 +76,16 @@ def main():
     @check("triton CUDA driver (needs cuda.h)")
     def _():
         # Builds triton's cuda_utils helper, the step torch.compile hits first (Megatron's jit warmup).
+        # Its gcc call only searches triton's own include dir, which the NGC image lacks; ladder/train.sh
+        # adds $CUDA_HOME/include to CPATH, so do the same here to check what training will see.
+        import os
+
+        inc = os.path.join(os.environ.get("CUDA_HOME") or "/usr/local/cuda", "include")
+        if os.path.isfile(os.path.join(inc, "cuda.h")):
+            os.environ["CPATH"] = inc + (":" + os.environ["CPATH"] if os.environ.get("CPATH") else "")
         from triton.runtime import driver
 
-        return str(driver.active.get_current_target())
+        return f"{driver.active.get_current_target()}, CPATH={os.environ.get('CPATH', '')}"
 
     @check("Muon available to Megatron")
     def _():
