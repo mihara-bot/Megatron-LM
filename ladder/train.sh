@@ -74,11 +74,17 @@ latest_iter() {   # iteration in a checkpoint directory's tracker file, 0 if non
 
 E_MAX=$(end_iter "$TPP_MAX")
 S_MAX=$(decay_start "$TPP_MAX")
+# The stable run keeps only the checkpoints the branches start from: every multiple of the gcd of the
+# branch decay starts (all multiples of SAVE_INTERVAL). Other regular saves are resume points only and
+# are deleted once the next one lands; the final save at E(TPP_MAX) is kept.
+RETAIN=0
+for t in $BRANCH_TPPS; do RETAIN=$(gcd "$(decay_start "$t")" "$RETAIN"); done
+if [ "$RETAIN" -eq 0 ]; then RETAIN=$SAVE_INTERVAL; fi
 MAIN_CKPT=$RUN_DIR/ckpt/main
 
 print_plan() {
     echo "== $CONFIG + $OPT: N_eff $N_EFF, $TOK_PER_ITER tokens/iter, warmup $WARMUP_ITERS, LR $LR"
-    echo "   save every $SAVE_INTERVAL, validate every $EVAL_INTERVAL, branch ends on multiples of $Q"
+    echo "   save every $SAVE_INTERVAL (stable run keeps multiples of $RETAIN), validate every $EVAL_INTERVAL, branch ends on multiples of $Q"
     printf "   %-8s %10s %10s %12s %8s\n" target decay_from end tokens TPP
     for t in $BRANCH_TPPS $TPP_MAX; do
         local e s
@@ -107,8 +113,7 @@ stable)
         SCHED_ARGS+=(--exit-interval "$TARGET")
     fi
     LOAD_ARGS=(--load "$CKPT")
-    # keep every regular save; extra saves (exit, signal) are deleted once the next regular one lands
-    SAVE_ARGS=(--save "$CKPT" --save-interval "$SAVE_INTERVAL" --save-retain-interval "$SAVE_INTERVAL")
+    SAVE_ARGS=(--save "$CKPT" --save-interval "$SAVE_INTERVAL" --save-retain-interval "$RETAIN")
     ;;
 branch)
     : "${TPP:?MODE=branch needs TPP, one of: $BRANCH_TPPS}"
@@ -129,7 +134,12 @@ branch)
         fi
         LOAD_ARGS=(--load "$MAIN_CKPT" --ckpt-step "$S")   # fork from the stable run
     fi
-    SAVE_ARGS=(--save "$CKPT" --save-interval "$SAVE_INTERVAL" --save-retain-interval "$TARGET")   # keeps only E(T)
+    # Megatron needs retain % save == 0, and E(T) is generally not a multiple of SAVE_INTERVAL. Save
+    # every (E-S)/k instead, the smallest k that keeps it within SAVE_INTERVAL: S = 4(E-S), so the saves
+    # land on S + j(E-S)/k and the last one on E; retain E keeps only that one.
+    span=$((TARGET - S)); k=$(( (span + SAVE_INTERVAL - 1) / SAVE_INTERVAL ))
+    while [ $((span % k)) -ne 0 ]; do k=$((k + 1)); done
+    SAVE_ARGS=(--save "$CKPT" --save-interval $((span / k)) --save-retain-interval "$TARGET")
     ;;
 *)
     echo "MODE must be stable or branch, got $MODE" >&2; exit 1 ;;
