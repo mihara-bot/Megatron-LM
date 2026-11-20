@@ -48,6 +48,9 @@ def _init_worker(args):
 
     _ARGS = args
     _TOKENIZER = AutoTokenizer.from_pretrained(args.tokenizer, use_fast=True)
+    # Documents are only tokenized, never fed to a model whole, so the model's context length does
+    # not apply; lifting it silences "Token indices sequence length is longer than ..." warnings.
+    _TOKENIZER.model_max_length = sys.maxsize
 
 
 def _strip_suffix(path):
