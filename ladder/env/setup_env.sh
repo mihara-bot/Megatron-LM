@@ -11,16 +11,6 @@
 #   VENV=/shared/envs/megatron bash ladder/env/setup_env.sh
 # Then in every job:  source <VENV>/bin/activate
 
-set -euo pipefail
-cd "$(dirname "$0")/../.."
-
-VENV=${VENV:-.venv}
-EO_REF=${EO_REF:-v0.3.0}   # emerging_optimizers version pinned in pyproject.toml
-
-if [ ! -x "$VENV/bin/python" ]; then
-    uv venv --system-site-packages --python "$(command -v python3)" "$VENV"
-fi
-source "$VENV/bin/activate"
 
 # Megatron itself, editable; builds the C++ dataset helper (megatron/core/datasets/helpers_cpp).
 uv pip install --no-deps --no-build-isolation -e .
