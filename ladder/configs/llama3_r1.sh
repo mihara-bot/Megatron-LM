@@ -13,8 +13,8 @@ GBS=256                       # 256 x 4096 = 1M tokens per iteration
 MBS=${MBS:-8}                 # per-GPU micro batch; GBS / (MBS * data-parallel size) = grad-accum steps
 
 # Schedule (see train.sh): one stable WSD run to TPP_MAX, decay branches at BRANCH_TPPS.
-TPP_MAX=200
-BRANCH_TPPS="20 50 100"
+TPP_MAX=50
+BRANCH_TPPS="20"              # cheap extra data point (1500 iters from the stable ckpt at 6000)
 SAVE_INTERVAL=2000            # checkpoint every N iterations (resume points and branch starts); multiple of 4
 EVAL_INTERVAL=500             # validation every N iterations
 # Branch ends E(T) are rounded to multiples of lcm(5/4*SAVE_INTERVAL, EVAL_INTERVAL) = 2500 here.

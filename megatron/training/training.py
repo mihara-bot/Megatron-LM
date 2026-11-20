@@ -3766,11 +3766,19 @@ def training_log(
         )
         if cfg.logger.log_throughput:
             log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} |'
+            peak_tflops = _peak_bf16_tflops_per_gpu(cfg.logger.peak_tflops_per_gpu)
+            mfu = throughput / peak_tflops if peak_tflops else None
+            if mfu is not None:
+                log_string += f' MFU: {mfu * 100:.1f}% |'
             if cfg.logger.log_timers_to_tensorboard:
                 if writer:
                     writer.add_scalar('throughput', throughput, iteration)
+                    if mfu is not None:
+                        writer.add_scalar('mfu', mfu, iteration)
                 if wandb_writer:
                     wandb_writer.log({'throughput': throughput}, iteration)
+                    if mfu is not None:
+                        wandb_writer.log({'mfu': mfu}, iteration)
         if cfg.logger.log_energy:
             energy = (energy_monitor.lap() / total_iterations) / safe_get_world_size()
             power = energy / elapsed_time_per_iteration
@@ -3957,6 +3965,35 @@ def _consume_embedding_min_norm_metrics(optimizer) -> Dict[str, float]:
         "embedding-min-norm/projection-delta-rms": norm_delta_rms,
         "embedding-min-norm/zero-row-events": zero_rows,
     }
+
+
+# Dense (no sparsity) BF16 tensor-core peak, TFLOP/s per GPU, matched against the device name in order.
+_PEAK_BF16_TFLOPS = (
+    ("H100 PCIe", 756.0),
+    ("H100 NVL", 835.0),
+    ("H100", 989.4),
+    ("H800", 989.4),
+    ("H200", 989.4),
+    ("GH200", 989.4),
+    ("B200", 2250.0),
+    ("A100", 312.0),
+    ("A800", 312.0),
+)
+
+
+@functools.lru_cache(maxsize=None)
+def _peak_bf16_tflops_per_gpu(override):
+    """MFU denominator: --peak-tflops-per-gpu if given, else looked up from the device name."""
+    if override:
+        return float(override)
+    if not torch.cuda.is_available():
+        return None
+    name = torch.cuda.get_device_name()
+    for key, peak in _PEAK_BF16_TFLOPS:
+        if key in name:
+            return peak
+    print_rank_0(f"MFU not logged: unknown peak TFLOP/s for '{name}', set --peak-tflops-per-gpu")
+    return None
 
 
 def compute_throughputs_and_append_to_progress_log(iteration, num_floating_point_operations_so_far):

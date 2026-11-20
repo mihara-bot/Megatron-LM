@@ -332,6 +332,12 @@ class LoggerConfig:
     log_throughput: bool = False
     """If set, calculate and log throughput per GPU."""
 
+    peak_tflops_per_gpu: float | None = None
+    """Dense BF16 peak TFLOP/s of one GPU, the denominator of the MFU printed with --log-throughput.
+    If unset, it is looked up from the device name (A100, H100/H800 SXM, H200, B200); on other GPUs
+    MFU is not printed. MFU uses the same model FLOPs as the throughput (causal attention, no recompute).
+    """
+
     log_throughput_to_tensorboard: bool = False
     """Enable throughput logging to tensorboard."""
 
