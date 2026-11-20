@@ -17,6 +17,7 @@
 #            the same stable run (same run directory, same data order) and adds the missing branches.
 #   NODES    override the config's node count
 #   QOS      e.g. polaris_idle (default: the account's standard QoS, max 32 GPUs at once)
+#   EXCLUDE  nodes to keep the jobs off, sbatch --exclude syntax (e.g. htv02 or htv[02,05])
 #   STABLE_TIME / BRANCH_TIME   sbatch --time for the two job kinds (default 72:00:00 / 24:00:00)
 #   DRY_RUN=1  print the sbatch commands only
 # Every job is ladder/launch/slurm.sbatch -> ladder/train.sh, which exits at once when a run has already
@@ -51,6 +52,7 @@ fi
 
 SBATCH=(sbatch --parsable --nodes="$NODES")
 if [ -n "${QOS:-}" ]; then SBATCH+=(--qos="$QOS"); fi
+if [ -n "${EXCLUDE:-}" ]; then SBATCH+=(--exclude="$EXCLUDE"); fi
 if [ "${DRY_RUN:-0}" != 1 ]; then mkdir -p logs; fi   # slurm.sbatch writes logs/%x-%j.out
 
 submit() {   # submit <time> <job name> <dependency or ""> VAR=value ...

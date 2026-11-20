@@ -13,6 +13,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mkdir -p logs
 
 export CONFIG=llama3_r1 OPT=muon
+export EXCLUDE=${EXCLUDE:-htv02}   # keep the jobs off these nodes (sbatch --exclude)
 FIRST_LR=1e-3
 REST_LRS="5e-4 7e-4 1.4e-3 2e-3"
 
