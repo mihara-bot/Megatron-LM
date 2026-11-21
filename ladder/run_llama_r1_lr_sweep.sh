@@ -48,3 +48,18 @@ CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP=20 \
   sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp20 ladder/launch/slurm.sbatch
 CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP=50 \
   sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp50 ladder/launch/slurm.sbatch
+
+# for idle resources
+
+if J=$(CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=stable \
+  sbatch --parsable --qos=polaris_idle --nodes=1 --exclude=htv02 \
+  --job-name=r1-muon-lr2e-3-main ladder/launch/slurm.sbatch); then
+  echo "lr 2e-3 stable: $J"
+
+  for tpp in 20 50; do
+    CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP="$tpp" \
+      sbatch --qos=polaris_idle --nodes=1 --exclude=htv02 \
+      --dependency="afterok:$J" --job-name="r1-muon-lr2e-3-tpp$tpp" \
+      ladder/launch/slurm.sbatch
+  done
+fi
