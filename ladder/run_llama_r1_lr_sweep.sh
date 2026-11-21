@@ -14,6 +14,10 @@ mkdir -p logs
 
 export CONFIG=llama3_r1 OPT=muon
 export EXCLUDE=${EXCLUDE:-htv02}   # keep the jobs off these nodes (sbatch --exclude)
+# Measured on 8 H200: ~0.91 s/iter, so the stable run (35000 iters) takes ~9 h and the TPP50 branch
+# (3500 iters) ~1 h, plus validation. A 72 h limit only starts on a node free for 72 h (no backfill,
+# no upcoming maintenance reservation), so ask for what the jobs need.
+export STABLE_TIME=${STABLE_TIME:-14:00:00} BRANCH_TIME=${BRANCH_TIME:-03:00:00}
 FIRST_LR=1e-3
 REST_LRS="5e-4 7e-4 1.4e-3 2e-3"
 
