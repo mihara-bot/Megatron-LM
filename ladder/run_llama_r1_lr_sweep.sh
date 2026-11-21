@@ -11,54 +11,54 @@ mkdir -p logs
 
 # ---- lr 5e-4 ----
 J=$(CONFIG=llama3_r1 OPT=muon LR=5e-4 MODE=stable \
-  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr5e-4-main ladder/launch/slurm.sbatch); echo "lr 5e-4 stable: $J"
+  sbatch --parsable --nodes=1 --job-name=r1-muon-lr5e-4-main ladder/launch/slurm.sbatch); echo "lr 5e-4 stable: $J"
 CONFIG=llama3_r1 OPT=muon LR=5e-4 MODE=branch TPP=20 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr5e-4-tpp20 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr5e-4-tpp20 ladder/launch/slurm.sbatch
 CONFIG=llama3_r1 OPT=muon LR=5e-4 MODE=branch TPP=50 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr5e-4-tpp50 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr5e-4-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 7e-4 ----
 J=$(CONFIG=llama3_r1 OPT=muon LR=7e-4 MODE=stable \
-  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr7e-4-main ladder/launch/slurm.sbatch); echo "lr 7e-4 stable: $J"
+  sbatch --parsable --nodes=1 --job-name=r1-muon-lr7e-4-main ladder/launch/slurm.sbatch); echo "lr 7e-4 stable: $J"
 CONFIG=llama3_r1 OPT=muon LR=7e-4 MODE=branch TPP=20 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr7e-4-tpp20 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr7e-4-tpp20 ladder/launch/slurm.sbatch
 CONFIG=llama3_r1 OPT=muon LR=7e-4 MODE=branch TPP=50 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr7e-4-tpp50 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr7e-4-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 1e-3 ----
 J=$(CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=stable \
-  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr1e-3-main ladder/launch/slurm.sbatch); echo "lr 1e-3 stable: $J"
+  sbatch --parsable --nodes=1 --job-name=r1-muon-lr1e-3-main ladder/launch/slurm.sbatch); echo "lr 1e-3 stable: $J"
 CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=branch TPP=20 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1e-3-tpp20 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr1e-3-tpp20 ladder/launch/slurm.sbatch
 CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=branch TPP=50 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1e-3-tpp50 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr1e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 1.4e-3 ----
 J=$(CONFIG=llama3_r1 OPT=muon LR=1.4e-3 MODE=stable \
-  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr1.4e-3-main ladder/launch/slurm.sbatch); echo "lr 1.4e-3 stable: $J"
+  sbatch --parsable --nodes=1 --job-name=r1-muon-lr1.4e-3-main ladder/launch/slurm.sbatch); echo "lr 1.4e-3 stable: $J"
 CONFIG=llama3_r1 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
 CONFIG=llama3_r1 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 2e-3 ----
 J=$(CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=stable \
-  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr2e-3-main ladder/launch/slurm.sbatch); echo "lr 2e-3 stable: $J"
+  sbatch --parsable --nodes=1 --job-name=r1-muon-lr2e-3-main ladder/launch/slurm.sbatch); echo "lr 2e-3 stable: $J"
 CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP=20 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp20 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp20 ladder/launch/slurm.sbatch
 CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP=50 \
-  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp50 ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp50 ladder/launch/slurm.sbatch
 
 # for idle resources
 
 if J=$(CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=stable \
-  sbatch --parsable --qos=polaris_idle --nodes=1 --exclude=htv02 \
+  sbatch --parsable --qos=polaris_idle --nodes=1 \
   --job-name=r1-muon-lr2e-3-main ladder/launch/slurm.sbatch); then
   echo "lr 2e-3 stable: $J"
 
   for tpp in 20 50; do
     CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP="$tpp" \
-      sbatch --qos=polaris_idle --nodes=1 --exclude=htv02 \
+      sbatch --qos=polaris_idle --nodes=1 \
       --dependency="afterok:$J" --job-name="r1-muon-lr2e-3-tpp$tpp" \
       ladder/launch/slurm.sbatch
   done
