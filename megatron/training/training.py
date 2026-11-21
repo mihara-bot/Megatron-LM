@@ -5694,8 +5694,10 @@ def evaluate_and_print_results(
         assert len(eval_iters) == len(data_iterators)
 
         # with full validation we need to distribute eval_iters to all ranks
+        # (use the list form: with a single validation set cfg.validation.eval_iters is an int, which
+        # would give a 0-d tensor whose tolist() is an int, not a one-element list)
         if mpu.get_tensor_model_parallel_rank() == 0:
-            eval_iters = torch.tensor(cfg.validation.eval_iters, dtype=torch.long, device='cuda')
+            eval_iters = torch.tensor(eval_iters, dtype=torch.long, device='cuda')
         else:
             eval_iters = torch.tensor([0] * len(eval_iters), dtype=torch.long, device='cuda')
         torch.distributed.broadcast(eval_iters, 0)
