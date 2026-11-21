@@ -1,42 +1,50 @@
-#!/bin/bash
-# LR sweep of llama3_r1 + Muon on SLURM.
+# LR sweep of llama3_r1 + Muon: plain sbatch commands, submitted by hand from the Megatron-LM root
+# (uv environment activated). Logs: logs/<job-name>-<jobid>.out. Runs: $OUT_ROOT/runs/llama3_r1_muon_lr<LR>.
 #
-# All runs of a rung share one dataset index in $OUT_ROOT/data_cache, and Megatron does not lock it
-# across jobs: several jobs that start before it exists all build and np.save the same files at once.
-# So submit one LR first, wait until its log shows "after dataloaders are built" (index on disk),
-# then submit the rest. The wait can take hours (queue + index build): run this in tmux, or
-#   nohup bash ladder/run_llama_r1_lr_sweep.sh > logs/sweep_r1.out 2>&1 &
-# Works from any directory. Before rerunning, scancel the jobs of an earlier attempt (squeue -u $USER):
-# two jobs of the same LR would write the same checkpoint directory.
-set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# Per LR: one stable job (35000 iters, ~9 h on 8 H200) and two decay branches (TPP20 from iter 5600,
+# TPP50 from iter 14000; ~1 h each). A branch needs the stable checkpoint it starts from, so it waits
+# for its stable job (--dependency=afterok). To submit a branch later by hand instead, drop the
+# --dependency flag once the stable job has finished.
+# The dataset index is already in $OUT_ROOT/data_cache (built by the debug run), so all stable jobs
+# can be submitted at once.
 mkdir -p logs
 
-export CONFIG=llama3_r1 OPT=muon
-export EXCLUDE=${EXCLUDE:-htv02}   # keep the jobs off these nodes (sbatch --exclude)
-# Measured on 8 H200: ~0.91 s/iter, so the stable run (35000 iters) takes ~9 h and the TPP50 branch
-# (3500 iters) ~1 h, plus validation. A 72 h limit only starts on a node free for 72 h (no backfill,
-# no upcoming maintenance reservation), so ask for what the jobs need.
-export STABLE_TIME=${STABLE_TIME:-14:00:00} BRANCH_TIME=${BRANCH_TIME:-03:00:00}
-FIRST_LR=1e-3
-REST_LRS="5e-4 7e-4 1.4e-3 2e-3"
+# ---- lr 5e-4 ----
+J=$(CONFIG=llama3_r1 OPT=muon LR=5e-4 MODE=stable \
+  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr5e-4-main ladder/launch/slurm.sbatch); echo "lr 5e-4 stable: $J"
+CONFIG=llama3_r1 OPT=muon LR=5e-4 MODE=branch TPP=20 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr5e-4-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r1 OPT=muon LR=5e-4 MODE=branch TPP=50 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr5e-4-tpp50 ladder/launch/slurm.sbatch
 
-DRY_RUN=1 bash ladder/sweep.sh                    # the jobs of the full grid, nothing submitted
+# ---- lr 7e-4 ----
+J=$(CONFIG=llama3_r1 OPT=muon LR=7e-4 MODE=stable \
+  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr7e-4-main ladder/launch/slurm.sbatch); echo "lr 7e-4 stable: $J"
+CONFIG=llama3_r1 OPT=muon LR=7e-4 MODE=branch TPP=20 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr7e-4-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r1 OPT=muon LR=7e-4 MODE=branch TPP=50 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr7e-4-tpp50 ladder/launch/slurm.sbatch
 
-out=$(LRS=$FIRST_LR bash ladder/sweep.sh)
-echo "$out"
-jid=$(awk '/stable job/ {print $NF; exit}' <<< "$out")
-log=logs/${CONFIG}-${OPT}-lr${FIRST_LR}-main-${jid}.out   # slurm.sbatch: --output=logs/%x-%j.out
+# ---- lr 1e-3 ----
+J=$(CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=stable \
+  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr1e-3-main ladder/launch/slurm.sbatch); echo "lr 1e-3 stable: $J"
+CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=branch TPP=20 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=branch TPP=50 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1e-3-tpp50 ladder/launch/slurm.sbatch
 
-echo "waiting for '$log' to show 'after dataloaders are built' ..."
-until grep -q "after dataloaders are built" "$log" 2>/dev/null; do
-    if [ -z "$(squeue -h -j "$jid" -o %T 2>/dev/null)" ]; then
-        grep -q "after dataloaders are built" "$log" 2>/dev/null && break
-        echo "job $jid left the queue before the dataloaders were built; see $log (sacct -j $jid)" >&2
-        exit 1
-    fi
-    sleep 60
-done
-echo "dataset index is built; submitting the other LRs"
+# ---- lr 1.4e-3 ----
+J=$(CONFIG=llama3_r1 OPT=muon LR=1.4e-3 MODE=stable \
+  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr1.4e-3-main ladder/launch/slurm.sbatch); echo "lr 1.4e-3 stable: $J"
+CONFIG=llama3_r1 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r1 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
 
-LRS=$REST_LRS bash ladder/sweep.sh
+# ---- lr 2e-3 ----
+J=$(CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=stable \
+  sbatch --parsable --nodes=1 --exclude=htv02 --job-name=r1-muon-lr2e-3-main ladder/launch/slurm.sbatch); echo "lr 2e-3 stable: $J"
+CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP=20 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=branch TPP=50 \
+  sbatch --nodes=1 --exclude=htv02 --dependency=afterok:$J --job-name=r1-muon-lr2e-3-tpp50 ladder/launch/slurm.sbatch
