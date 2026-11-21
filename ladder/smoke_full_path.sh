@@ -9,6 +9,7 @@
 #                                             minus_sqrt decay 160 -> 240 to LR 0, saves into ckpt/tpp20
 # train.sh starts a TPP20 branch from main/iter_0005600; the symlink below points it at iter 160, and
 # --ckpt-step 160 in EXTRA_ARGS (later flags win) loads that iteration. Megatron never deletes symlinks.
+# The scheduler asserts warmup < decay end, so job 3 shortens warmup to 100 (the real branch: 500 < 7000).
 #
 # Afterwards: rm -rf "$OUT_ROOT/runs/debug_full"
 OUT_ROOT=${OUT_ROOT:-/fast/users/zhuangxinlin/ckpts}
@@ -22,5 +23,5 @@ J2=$(CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=stable RUN=debug_full \
   EXTRA_ARGS="--eval-interval 20 --save-interval 40 --exit-interval 160" \
   sbatch --parsable --nodes=1 --exclude=htv02 --dependency=afterok:$J1 --job-name=smoke-2-resume ladder/launch/slurm.sbatch); echo "job 2: $J2"
 J3=$(CONFIG=llama3_r1 OPT=muon LR=1e-3 MODE=branch TPP=20 RUN=debug_full \
-  EXTRA_ARGS="--ckpt-step 160 --lr-decay-iters 240 --lr-wsd-decay-iters 80 --exit-interval 240 --save-interval 40 --save-retain-interval 240 --eval-interval 20" \
+  EXTRA_ARGS="--ckpt-step 160 --lr-warmup-iters 100 --lr-decay-iters 240 --lr-wsd-decay-iters 80 --exit-interval 240 --save-interval 40 --save-retain-interval 240 --eval-interval 20" \
   sbatch --parsable --nodes=1 --exclude=htv02 --dependency=afterok:$J2 --job-name=smoke-3-branch ladder/launch/slurm.sbatch); echo "job 3: $J3"
