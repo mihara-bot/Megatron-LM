@@ -347,11 +347,11 @@ def plot(config, opt, runs, pts_by_t, fits, joint, path, window, noise):
         Line2D([], [], marker="o", ls="none", color=INK2, mec="white", markersize=8, label="run (in fit window)"),
         Line2D([], [], marker="o", ls="none", mfc="white", mec=INK2, markersize=8,
                label=f"run (outside ×{window:g} window)"),
-        Line2D([], [], ls="-", color=INK, lw=1.6, label="layer 1: quadratic fit"),
+        Line2D([], [], ls="-", color=INK, lw=1.6, label="per-TPP quadratic fit"),
         Line2D([], [], ls=":", color=INK, lw=1.4, label="extrapolation"),
         Line2D([], [], marker="*", ls="none", color=INK, markersize=12, label=r"vertex $(\eta^*, L^*)$"),
         Patch(color=BAND, label=rf"80% band of $\eta^*$ ($\sigma={noise:g}$)"),
-        Line2D([], [], ls="--", color=JOINT, lw=1.3, label="layer 2: joint fit"),
+        Line2D([], [], ls="--", color=JOINT, lw=1.3, label="joint fit"),
     ], loc="upper center", bbox_to_anchor=(0.5, 0.945), ncol=7, fontsize=10, handlelength=1.8,
         columnspacing=1.4)
 
@@ -398,7 +398,7 @@ def plot(config, opt, runs, pts_by_t, fits, joint, path, window, noise):
     axf.add_patch(matplotlib.patches.FancyBboxPatch((0, 0), 1, 1, boxstyle="round,pad=0.0,rounding_size=0.02",
                                                     transform=axf.transAxes, fc="#f7f7f5", ec=GRID, lw=0.8))
     l1 = [
-        r"$\bf{Layer\ 1}$  per TPP, ordinary least squares on the LRs within "
+        r"$\bf{Fit\ 1:\ per\text{-}TPP}$   ordinary least squares on the LRs within "
         + rf"$\times{window:g}$ of the best grid LR",
         r"$L(\eta) = L^* + k\,\left(\ln\eta - \ln\eta^*\right)^2$",
         rf"80% band of $\eta^*$: refit 4000 times with $\epsilon \sim \mathcal{{N}}(0, \sigma^2)$ added to "
@@ -406,7 +406,7 @@ def plot(config, opt, runs, pts_by_t, fits, joint, path, window, noise):
     ]
     if joint:
         l2 = [
-            r"$\bf{Layer\ 2}$  joint over TPPs, nonlinear least squares, shared shape across horizons",
+            r"$\bf{Fit\ 2:\ joint\ across\ TPPs}$   nonlinear least squares, shared shape across horizons",
             r"$L(\eta, T) = L^*_T + k_0\,(T/50)^{\kappa}\,\left[\ln\eta - \ln\eta^*_{50} - \gamma\ln(T/50)\right]^2$",
             rf"$\eta^*_{{50}} = {sci(math.exp(joint['x0']))}$,  "
             + rf"$\gamma = {joint['gamma']:+.2f} \pm {joint['gamma_se']:.2f}$,  "
@@ -414,7 +414,7 @@ def plot(config, opt, runs, pts_by_t, fits, joint, path, window, noise):
             + rf"{joint['n']} points / {len(joint['p'])} parameters, residual RMS $= {joint['rms'] * 1e3:.2f}\times10^{{-3}}$",
         ]
     else:
-        l2 = [r"$\bf{Layer\ 2}$  joint over TPPs: needs at least 2 TPPs with enough points"]
+        l2 = [r"$\bf{Fit\ 2:\ joint\ across\ TPPs}$   needs at least 2 TPPs with enough points"]
     for col, lines in ((0.015, l1), (0.5, l2)):
         for i, s in enumerate(lines):
             axf.text(col, 0.80 - i * 0.30, s, transform=axf.transAxes, fontsize=13 if i == 1 else 10.5,
