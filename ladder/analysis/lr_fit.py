@@ -187,119 +187,241 @@ def joint_fit(points_by_t, window):
 
 
 # ---- plotting -----------------------------------------------------------------------------------
-def plot(config, opt, runs, pts_by_t, fits, joint, path):
+INK, INK2, MUTED, GRID = "#0b0b0b", "#52514e", "#8a8984", "#e4e3df"
+JOINT = "#eb6834"                                   # joint fit (categorical slot 2)
+BAND = "#e9e8e4"                                    # lr* noise band
+LR_RAMP = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95",
+           "#104281", "#0d366b"]   # one blue hue, steps 250-700; light = small LR
+
+
+def set_style():
+    import matplotlib
+    from matplotlib import font_manager
+    names = {f.name for f in font_manager.fontManager.ttflist}
+    serif = [n for n in ("Times New Roman", "Times", "Nimbus Roman", "Liberation Serif") if n in names]
+    if "Times New Roman" not in names:
+        print(f"   note: Times New Roman not installed, using {serif[0] if serif else 'DejaVu Serif'}",
+              file=sys.stderr)
+    matplotlib.rcParams.update({
+        "font.family": "serif", "font.serif": serif + ["DejaVu Serif"], "mathtext.fontset": "stix",
+        "font.size": 10.5, "axes.titlesize": 12, "axes.labelsize": 11, "legend.fontsize": 9.5,
+        "xtick.labelsize": 9.5, "ytick.labelsize": 9.5,
+        "axes.edgecolor": INK2, "axes.labelcolor": INK, "xtick.color": INK2, "ytick.color": INK2,
+        "axes.spines.top": False, "axes.spines.right": False, "axes.linewidth": 0.8,
+        "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6, "axes.axisbelow": True,
+        "legend.frameon": False, "figure.facecolor": "white", "savefig.facecolor": "white",
+    })
+
+
+def sci(x, digits=2):
+    """x as mathtext a x 10^b."""
+    if not np.isfinite(x):
+        return r"\infty"
+    e = int(math.floor(math.log10(abs(x))))
+    return rf"{x / 10**e:.{digits}f}\times10^{{{e}}}"
+
+
+def lr_axis(ax, lrs, lo, hi, which="x"):
+    """Log LR axis with ticks at the tested LRs, labelled in units of 1e-3."""
+    import matplotlib.ticker as mt
+    ticks = [l for l in lrs if lo <= l <= hi]
+    labels = [f"{l * 1e3:g}" for l in ticks]
+    if which == "x":
+        ax.set_xscale("log"); ax.set_xlim(lo, hi)
+        ax.set_xticks(ticks); ax.set_xticklabels(labels)
+        ax.xaxis.set_minor_formatter(mt.NullFormatter())
+    else:
+        ax.set_yscale("log"); ax.set_ylim(lo, hi)
+        ax.set_yticks(ticks); ax.set_yticklabels(labels)
+        ax.yaxis.set_minor_formatter(mt.NullFormatter())
+
+
+def plot(config, opt, runs, pts_by_t, fits, joint, path, window, noise):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    set_style()
 
+    mine = {k: r for k, r in runs.items() if k[0] == config and k[1] == opt}
+    any_run = next(iter(mine.values()))
+    plan, tok = any_run["plan"], any_run["tok_per_iter"]
     ts = sorted(pts_by_t)
-    all_lrs = sorted({k[2] for k in runs if k[0] == config and k[1] == opt})
-    cmap = plt.get_cmap("viridis")
-    color = {lr: cmap(i / max(1, len(all_lrs) - 1) * 0.9) for i, lr in enumerate(all_lrs)}
-    tcolor = {t: plt.get_cmap("tab10")(i) for i, t in enumerate(ts)}
+    all_lrs = sorted({k[2] for k in mine})
+    idx = np.linspace(0, len(LR_RAMP) - 1, len(all_lrs)).round().astype(int) if len(all_lrs) > 1 else [2]
+    color = {lr: LR_RAMP[i] for lr, i in zip(all_lrs, idx)}
+    lo, hi = min(all_lrs) / 1.5, max(all_lrs) * 2.4
+    grid = np.exp(np.linspace(math.log(lo), math.log(hi), 300))
 
-    ncol = max(len(ts), 1) + 1
-    fig = plt.figure(figsize=(4.2 * ncol, 8.4))
-    gs = GridSpec(2, ncol, figure=fig, height_ratios=[1, 1.05], hspace=0.32, wspace=0.3)
+    ncol = len(ts) + 1
+    fig = plt.figure(figsize=(4.1 * ncol, 10.6))
+    gs = GridSpec(2, ncol, figure=fig, height_ratios=[1, 0.95], hspace=0.40, wspace=0.28,
+                  left=0.055, right=0.985, top=0.88, bottom=0.215)
 
-    lo = min(all_lrs) / 1.6
-    hi = max(all_lrs) * 2.2
-    grid = np.exp(np.linspace(math.log(lo), math.log(hi), 200))
+    # -- row 1: loss vs LR per TPP ---------------------------------------------------------------
     for j, t in enumerate(ts):
         ax = fig.add_subplot(gs[0, j])
-        pts = pts_by_t[t]
         f = fits[t]
-        lr_p = np.array([p[0] for p in pts]); y_p = np.array([p[1] for p in pts])
+        lr_p = np.array([p[0] for p in pts_by_t[t]]); y_p = np.array([p[1] for p in pts_by_t[t]])
         used = np.isin(lr_p, f["used"])
-        ax.scatter(lr_p[used], y_p[used], color=tcolor[t], zorder=3, label="endpoint (in fit window)")
-        if (~used).any():
-            ax.scatter(lr_p[~used], y_p[~used], facecolors="none", edgecolors=tcolor[t], zorder=3,
-                       label="endpoint (outside window)")
-        if "coef" in f:
-            u_lo, u_hi = f["used"].min(), f["used"].max()
-            yy = np.polyval(f["coef"], np.log(grid))
-            inside = (grid >= u_lo) & (grid <= u_hi)
-            ax.plot(grid[inside], yy[inside], "-", color=tcolor[t], alpha=0.8, label="quadratic in ln lr")
-            ax.plot(grid[grid >= u_hi], yy[grid >= u_hi], ":", color=tcolor[t], alpha=0.8)
-            ax.plot(grid[grid <= u_lo], yy[grid <= u_lo], ":", color=tcolor[t], alpha=0.8, label="extrapolation")
-            if np.isfinite(f["lr_star"]) and f["loss_star"] is not None:
-                ls = f["lr_star"]
-                lab = f"lr* {ls:.2e}" + ("" if f["bracketed"] else " (extrapolated)")
-                ax.axvline(ls, color="k", ls="--", lw=0.8)
-                if "lr_ci" in f:
-                    ax.axvspan(max(f["lr_ci"][0], lo), min(f["lr_ci"][1], hi), color="0.5", alpha=0.15,
-                               label="80% lr* band (noise)")
-                ax.scatter([ls], [f["loss_star"]], marker="*", s=140, color="k", zorder=4, label=lab)
+        if "lr_ci" in f and np.isfinite(f.get("lr_star", np.nan)):
+            ax.axvspan(max(f["lr_ci"][0], lo), min(f["lr_ci"][1], hi), color=BAND, lw=0, zorder=0)
         if joint and t in joint["ts"]:
-            yj = [joint["predict"](g, t) for g in grid]
-            ax.plot(grid, yj, "-", color="crimson", lw=0.9, alpha=0.6, label="joint fit")
-        ax.set_xscale("log")
-        ymin = y_p.min()
-        ax.set_ylim(ymin - 0.004, max(y_p.max(), ymin + 0.02) + 0.004)
-        ax.set_xlim(lo, hi)
-        ax.set_title(f"TPP {t}: endpoint validation loss")
-        ax.set_xlabel("peak LR")
+            ax.plot(grid, [joint["predict"](g, t) for g in grid], "--", color=JOINT, lw=1.3, zorder=2)
+        if "coef" in f:
+            yy = np.polyval(f["coef"], np.log(grid))
+            u_lo, u_hi = f["used"].min(), f["used"].max()
+            ins = (grid >= u_lo) & (grid <= u_hi)
+            ax.plot(grid[ins], yy[ins], "-", color=INK, lw=1.6, zorder=3)
+            ax.plot(grid[grid >= u_hi], yy[grid >= u_hi], ":", color=INK, lw=1.4, zorder=3)
+            ax.plot(grid[grid <= u_lo], yy[grid <= u_lo], ":", color=INK, lw=1.4, zorder=3)
+        ax.scatter(lr_p[used], y_p[used], s=46, color=INK2, edgecolors="white", linewidths=1.2, zorder=4)
+        if (~used).any():
+            ax.scatter(lr_p[~used], y_p[~used], s=46, facecolors="white", edgecolors=INK2, linewidths=1.2,
+                       zorder=4)
+        txt = []
+        if "lr_star" in f and np.isfinite(f["lr_star"]) and f["loss_star"] is not None:
+            ax.scatter([f["lr_star"]], [f["loss_star"]], marker="*", s=190, color=INK, edgecolors="white",
+                       linewidths=0.8, zorder=5)
+            txt.append(rf"$\eta^* = {sci(f['lr_star'])}$" + ("" if f["bracketed"] else "  (extrapolated)"))
+            if "lr_ci" in f:
+                c_lo, c_hi = f["lr_ci"]
+                c_hi_s = rf"> {sci(hi, 1)}" if c_hi > hi else sci(c_hi)
+                txt.append(rf"80%: $[{sci(c_lo)},\ {c_hi_s}]$")
+            txt.append(rf"$L^* = {f['loss_star']:.4f}$,  $k = {f['k']:.4f}$")
+        elif "lr_star" in f:
+            txt.append("no minimum yet (fit not convex)")
+        else:
+            txt.append(f"only {f['n_used']} LRs in window: no fit")
+        ax.text(0.03, 0.04, "\n".join(txt), transform=ax.transAxes, fontsize=9.5, color=INK, va="bottom",
+                linespacing=1.5, bbox=dict(boxstyle="round,pad=0.35", fc="white", ec=GRID, lw=0.8))
+        lr_axis(ax, all_lrs, lo, hi)
+        ymin, ymax = y_p.min(), max(y_p.max(), y_p.min() + 0.02)
+        pad = 0.12 * (ymax - ymin)
+        ax.set_ylim(ymin - 2.2 * pad - 0.004, ymax + pad)
+        n_tok = plan[t]["end"] * tok / 1e9
+        ax.set_title(f"TPP {t}  ({n_tok:.1f}B tokens)", color=INK)
+        ax.set_xlabel(r"peak LR ($\times10^{-3}$)")
         if j == 0:
-            ax.set_ylabel("validation loss")
-        ax.grid(alpha=0.3, which="both")
-        ax.legend(fontsize=7, loc="upper right")
+            ax.set_ylabel("final validation loss")
+        ax.grid(axis="x", visible=False)
 
-    # lr* vs TPP
+    # -- row 1, last: lr* vs TPP -----------------------------------------------------------------
     ax = fig.add_subplot(gs[0, ncol - 1])
     for t in ts:
         f = fits[t]
+        ax.scatter([t], [f["best_lr"]], marker="x", s=46, color=MUTED, linewidths=1.4, zorder=3)
         if "lr_star" in f and np.isfinite(f["lr_star"]):
-            ci = f.get("lr_ci", (f["lr_star"], f["lr_star"]))
-            yerr = [[f["lr_star"] - max(min(ci[0], f["lr_star"]), lo)], [max(min(ci[1], hi), f["lr_star"]) - f["lr_star"]]]
-            ax.errorbar([t], [f["lr_star"]], yerr=yerr, fmt="o" if f["bracketed"] else "^",
-                        color=tcolor[t], capsize=3,
-                        label=f"TPP{t} per-TPP fit" + ("" if f["bracketed"] else " (extrap.)"))
-        ax.scatter([t], [f["best_lr"]], marker="x", color=tcolor[t])
+            s = f["lr_star"]
+            ci = f.get("lr_ci", (s, s))
+            lo_e, hi_e = max(min(ci[0], s), lo), max(min(ci[1], hi), s)
+            ax.errorbar([t], [s], yerr=[[s - lo_e], [hi_e - s]], fmt="none", ecolor=INK2, elinewidth=1.1,
+                        capsize=3, zorder=3)
+            ax.scatter([t], [s], marker="o" if f["bracketed"] else "^", s=50,
+                       facecolors=INK if f["bracketed"] else "white", edgecolors=INK, linewidths=1.3, zorder=4)
+            if ci[1] > hi:
+                ax.annotate("", xy=(t, hi), xytext=(t, hi / 1.25),
+                            arrowprops=dict(arrowstyle="->", color=INK2, lw=1.1))
     if joint:
-        tt = np.linspace(min(ts) * 0.8, max(ts) * 1.25, 50)
-        ax.plot(tt, np.exp(joint["x0"] + joint["gamma"] * np.log(tt / T_REF)), "-", color="crimson",
-                label=f"joint: lr* ~ T^{joint['gamma']:+.2f}±{joint['gamma_se']:.2f}")
-    ax.set_xscale("log"); ax.set_yscale("log")
-    ax.set_ylim(lo, hi)
-    ax.set_xticks(ts)
-    ax.set_xticklabels([str(t) for t in ts])
+        tt = np.exp(np.linspace(math.log(min(ts) * 0.75), math.log(max(ts) * 1.35), 60))
+        ax.plot(tt, np.exp(joint["x0"] + joint["gamma"] * np.log(tt / T_REF)), "--", color=JOINT, lw=1.4)
+    ax.set_xscale("log")
+    ax.set_xticks(ts); ax.set_xticklabels([str(t) for t in ts])
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
-    ax.set_xlabel("TPP (target)"); ax.set_ylabel("optimal LR")
-    ax.set_title("optimal LR vs horizon (x = best grid LR,\nbars = 80% band clipped to the plot)", fontsize=10)
-    ax.grid(alpha=0.3, which="both")
-    ax.legend(fontsize=7)
+    ax.set_xlim(min(ts) * 0.75, max(ts) * 1.35)
+    lr_axis(ax, all_lrs, lo, hi, which="y")
+    ax.set_xlabel("TPP (training horizon)")
+    ax.set_ylabel(r"optimal LR ($\times10^{-3}$)")
+    ax.set_title(r"$\eta^*$ vs. horizon", color=INK)
+    ax.legend(handles=[
+        Line2D([], [], marker="x", ls="none", color=MUTED, markersize=7, label="best grid LR"),
+        Line2D([], [], marker="o", ls="none", color=INK, markersize=7, label=r"$\eta^*$ bracketed"),
+        Line2D([], [], marker="^", ls="none", mfc="white", mec=INK, markersize=7, label=r"$\eta^*$ extrapolated"),
+        Line2D([], [], ls="--", color=JOINT, lw=1.4, label="joint fit"),
+    ], loc="upper left", fontsize=9, handletextpad=0.4, borderaxespad=0.2)
 
-    # validation curves
+    # shared legend for row 1
+    fig.legend(handles=[
+        Line2D([], [], marker="o", ls="none", color=INK2, mec="white", markersize=8, label="run (in fit window)"),
+        Line2D([], [], marker="o", ls="none", mfc="white", mec=INK2, markersize=8,
+               label=f"run (outside ×{window:g} window)"),
+        Line2D([], [], ls="-", color=INK, lw=1.6, label="layer 1: quadratic fit"),
+        Line2D([], [], ls=":", color=INK, lw=1.4, label="extrapolation"),
+        Line2D([], [], marker="*", ls="none", color=INK, markersize=12, label=r"vertex $(\eta^*, L^*)$"),
+        Patch(color=BAND, label=rf"80% band of $\eta^*$ ($\sigma={noise:g}$)"),
+        Line2D([], [], ls="--", color=JOINT, lw=1.3, label="layer 2: joint fit"),
+    ], loc="upper center", bbox_to_anchor=(0.5, 0.945), ncol=7, fontsize=10, handlelength=1.8,
+        columnspacing=1.4)
+
+    # -- row 2: validation curves + LR schedule --------------------------------------------------
     ax = fig.add_subplot(gs[1, :ncol - 1])
     ax2 = fig.add_subplot(gs[1, ncol - 1])
     floor, ceil = math.inf, -math.inf
-    for (c, o, lr, tag), r in sorted(runs.items(), key=lambda kv: (kv[0][2], kv[0][3])):
-        if c != config or o != opt or not r["valid"]:
-            continue
-        it = np.array(sorted(r["valid"]))
-        v = np.array([r["valid"][i] for i in it])
-        tok = it * r["tok_per_iter"] / 1e9
-        ls = "-" if tag == "main" else "--"
-        ax.plot(tok, v, ls, color=color[lr], lw=1.2 if tag == "main" else 1.0,
-                label=f"lr {lr:.1e}" if tag == "main" else None)
-        ax.scatter(tok[-1:], v[-1:], color=color[lr], s=12)
-        floor = min(floor, v.min())
-        ceil = max(ceil, np.percentile(v, 30))
+    for (c, o, lr, tag), r in sorted(mine.items(), key=lambda kv: (kv[0][2], kv[0][3])):
+        if r["valid"]:
+            it = np.array(sorted(r["valid"]))
+            v = np.array([r["valid"][i] for i in it])
+            x = it * r["tok_per_iter"] / 1e9
+            main = tag == "main"
+            ax.plot(x, v, ls="-" if main else (0, (4, 2)), color=color[lr], lw=1.6 if main else 1.3,
+                    label=f"{lr * 1e3:g}" if main else None, zorder=3)
+            ax.scatter(x[-1:], v[-1:], s=22, color=color[lr], edgecolors="white", linewidths=0.8, zorder=4)
+            floor = min(floor, v.min()); ceil = max(ceil, np.percentile(v, 30))
         if r["train"]:
             ti = np.array(sorted(r["train"]))
-            ax2.plot(ti * r["tok_per_iter"] / 1e9, [r["train"][i][0] for i in ti], ls, color=color[lr], lw=1)
-    ax.set_ylim(floor - 0.01, ceil + 0.05)
-    ax.set_xlabel("tokens (B)"); ax.set_ylabel("validation loss")
-    ax.set_title("validation curves (solid = stable run, dashed = decay branches)")
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8, ncol=2)
-    ax2.set_xlabel("tokens (B)"); ax2.set_ylabel("learning rate")
-    ax2.set_title("LR schedules")
-    ax2.grid(alpha=0.3)
+            ax2.plot(ti * r["tok_per_iter"] / 1e9, [r["train"][i][0] * 1e3 for i in ti],
+                     ls="-" if tag == "main" else (0, (4, 2)), color=color[lr], lw=1.3)
+    for t, p in plan.items():                         # decay starts of every horizon
+        for a in (ax, ax2):
+            a.axvline(p["start"] * tok / 1e9, color=MUTED, lw=0.8, ls=":", zorder=1)
+        ax.text(p["start"] * tok / 1e9, 1.0, f" TPP{t} decay", transform=ax.get_xaxis_transform(),
+                fontsize=9, color=MUTED, va="bottom", ha="left")
+    ax.set_ylim(floor - 0.015, ceil + 0.05)
+    ax.set_xlim(0, max(p["end"] for p in plan.values()) * tok / 1e9 * 1.02)
+    ax.set_xlabel("training tokens (B)")
+    ax.set_ylabel("validation loss")
+    ax.set_title("Validation curves   (solid: stable run,  dashed: decay branches,  dot: endpoint)",
+                 color=INK, pad=16)
+    leg = ax.legend(title=r"peak LR ($\times10^{-3}$)", ncol=len(all_lrs), loc="upper right", fontsize=9.5,
+                    title_fontsize=9.5, handlelength=1.8)
+    leg._legend_box.align = "right"
+    ax2.set_xlim(ax.get_xlim())
+    ax2.set_xlabel("training tokens (B)")
+    ax2.set_ylabel(r"learning rate ($\times10^{-3}$)")
+    ax2.set_title("LR schedules (WSD, 1-sqrt decay)", color=INK, pad=16)
 
-    fig.suptitle(f"{config} + {opt}: LR sweep", fontsize=13)
-    fig.savefig(path, dpi=130, bbox_inches="tight")
+    # -- row 3: the models -----------------------------------------------------------------------
+    axf = fig.add_axes([0.055, 0.018, 0.93, 0.118])
+    axf.axis("off")
+    axf.add_patch(matplotlib.patches.FancyBboxPatch((0, 0), 1, 1, boxstyle="round,pad=0.0,rounding_size=0.02",
+                                                    transform=axf.transAxes, fc="#f7f7f5", ec=GRID, lw=0.8))
+    l1 = [
+        r"$\bf{Layer\ 1}$  per TPP, ordinary least squares on the LRs within "
+        + rf"$\times{window:g}$ of the best grid LR",
+        r"$L(\eta) = L^* + k\,\left(\ln\eta - \ln\eta^*\right)^2$",
+        rf"80% band of $\eta^*$: refit 4000 times with $\epsilon \sim \mathcal{{N}}(0, \sigma^2)$ added to "
+        + rf"each loss,  $\sigma = {noise:g}$ (assumed)",
+    ]
+    if joint:
+        l2 = [
+            r"$\bf{Layer\ 2}$  joint over TPPs, nonlinear least squares, shared shape across horizons",
+            r"$L(\eta, T) = L^*_T + k_0\,(T/50)^{\kappa}\,\left[\ln\eta - \ln\eta^*_{50} - \gamma\ln(T/50)\right]^2$",
+            rf"$\eta^*_{{50}} = {sci(math.exp(joint['x0']))}$,  "
+            + rf"$\gamma = {joint['gamma']:+.2f} \pm {joint['gamma_se']:.2f}$,  "
+            + rf"$k_0 = {joint['k0']:.4f}$,  $\kappa = {joint['kappa']:+.2f} \pm {joint['kappa_se']:.2f}$;  "
+            + rf"{joint['n']} points / {len(joint['p'])} parameters, residual RMS $= {joint['rms'] * 1e3:.2f}\times10^{{-3}}$",
+        ]
+    else:
+        l2 = [r"$\bf{Layer\ 2}$  joint over TPPs: needs at least 2 TPPs with enough points"]
+    for col, lines in ((0.015, l1), (0.5, l2)):
+        for i, s in enumerate(lines):
+            axf.text(col, 0.80 - i * 0.30, s, transform=axf.transAxes, fontsize=13 if i == 1 else 10.5,
+                     color=INK, va="center", ha="left")
+
+    fig.suptitle(f"{config} + {opt}: learning-rate sweep", fontsize=16, color=INK, y=0.988)
+    fig.savefig(path, dpi=150)
     plt.close(fig)
 
 
@@ -391,7 +513,7 @@ def main():
                                      for t in joint["ts"]))
         if not args.no_plot and pts_by_t:
             path = os.path.join(args.out_dir, f"lr_fit_{config}_{opt}.png")
-            plot(config, opt, runs, pts_by_t, fits, joint, path)
+            plot(config, opt, runs, pts_by_t, fits, joint, path, args.window, args.noise)
             print(f"   plot -> {path}")
 
 
