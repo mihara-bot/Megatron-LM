@@ -340,7 +340,8 @@ def plot(config, opt, runs, pts_by_t, fits, joint, path, window, noise):
         Line2D([], [], marker="o", ls="none", color=INK, markersize=7, label=r"$\eta^*$ bracketed"),
         Line2D([], [], marker="^", ls="none", mfc="white", mec=INK, markersize=7, label=r"$\eta^*$ extrapolated"),
         Line2D([], [], ls="--", color=JOINT, lw=1.4, label="joint fit"),
-    ], loc="upper left", fontsize=9, handletextpad=0.4, borderaxespad=0.2)
+    ], loc="best", fontsize=9, handletextpad=0.4, borderaxespad=0.2, framealpha=0.9, frameon=True,
+        edgecolor=GRID)
 
     # shared legend for row 1
     fig.legend(handles=[
