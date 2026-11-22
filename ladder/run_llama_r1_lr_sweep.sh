@@ -63,3 +63,10 @@ if J=$(CONFIG=llama3_r1 OPT=muon LR=2e-3 MODE=stable \
       ladder/launch/slurm.sbatch
   done
 fi
+
+# ---- fit the sweep ----
+# Reads every logs/*.out written so far (unfinished runs are listed, not fitted), so rerun it whenever
+# more jobs finish. Writes logs/lr_fit/lr_fit_llama3_r1_muon.png and logs/lr_fit/lr_points.csv.
+# Needs numpy, scipy and matplotlib in the active environment.
+python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config llama3_r1 --opt muon \
+  --window 2.0 --noise 1e-3 --out-dir logs/lr_fit
