@@ -1,0 +1,2 @@
+# The repo-wide .gitignore has `slurm*` (meant for slurm-<jobid>.out logs); keep our launcher tracked.
+!launch/slurm.sbatch
