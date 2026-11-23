@@ -68,6 +68,10 @@ CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
 # CONFIG=llama3_r1 OPT=muon LR=4e-3 MODE=branch TPP=50 \
 #   sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr4e-3-tpp50 ladder/launch/slurm.sbatch
 
+CONFIG=llama3_r1 OPT=muon LR=4e-3 MODE=stable \
+  sbatch --nodes=1 --qos=polaris_idle --job-name=r1-muon-lr4e-3-main ladder/launch/slurm.sbatch
+
+
 # ---- lr 5.6e-3 ---- (2026-11-23: 4e-3 best at TPP20 / TPP50) stable run stops at the TPP50 decay start
 # (iter 14000, STOP_TPP=50); TPP20 / TPP50 branches. The AdamW part (embedding, lm_head) runs at this LR
 # too: watch grad norm and loss spikes.
@@ -84,3 +88,6 @@ CONFIG=llama3_r1 OPT=muon LR=5.6e-3 MODE=branch TPP=50 \
 # Needs numpy, scipy and matplotlib in the active environment.
 python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config llama3_r1 --opt muon \
   --window 2.0 --noise 1e-3 --out-dir logs/lr_fit
+
+
+# finished: 5e-4 7e-4 1e-3 1.4e-3 2e-3 2.8e-3
