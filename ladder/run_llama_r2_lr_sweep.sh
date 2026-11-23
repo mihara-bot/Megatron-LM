@@ -88,6 +88,33 @@ CONFIG=llama3_r2 OPT=muon LR=4e-3 MODE=branch TPP=50 \
   sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
   --job-name=llama3_r2-muon-lr4e-3-tpp50 ladder/launch/slurm.sbatch
 
+# ---- lr 1.4e-3 / 2e-3 on idle QoS ---- (copies of the blocks above with --qos=polaris_idle)
+# Idle QoS has no 32-GPU cap but can be preempted; a requeued job resumes from the latest checkpoint.
+# These write to the same run directory as the standard blocks above (llama3_r2_muon_lr<LR>), so run
+# only one of the two per LR: scancel the standard jobs of that LR first, or paste only these blocks.
+
+# ---- lr 1.4e-3 (idle) ----
+J=$(CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=stable \
+  sbatch --parsable --qos=polaris_idle --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr1.4e-3-main ladder/launch/slurm.sbatch)
+echo "lr 1.4e-3 stable (idle): $J"
+CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
+  sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
+  sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
+
+# ---- lr 2e-3 (idle) ----
+J=$(CONFIG=llama3_r2 OPT=muon LR=2e-3 MODE=stable \
+  sbatch --parsable --qos=polaris_idle --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr2e-3-main ladder/launch/slurm.sbatch)
+echo "lr 2e-3 stable (idle): $J"
+CONFIG=llama3_r2 OPT=muon LR=2e-3 MODE=branch TPP=20 \
+  sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr2e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r2 OPT=muon LR=2e-3 MODE=branch TPP=50 \
+  sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr2e-3-tpp50 ladder/launch/slurm.sbatch
+
 # ---- fit the sweep ----
 # Reads every logs/*.out written so far (unfinished runs are listed, not fitted), so rerun it whenever
 # more jobs finish. Writes logs/lr_fit/lr_fit_llama3_r2_muon.png and logs/lr_fit/lr_points.csv.
