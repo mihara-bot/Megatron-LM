@@ -68,6 +68,16 @@ CONFIG=llama3_r1 OPT=muon LR=4e-3 MODE=branch TPP=20 \
 CONFIG=llama3_r1 OPT=muon LR=4e-3 MODE=branch TPP=50 \
   sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr4e-3-tpp50 ladder/launch/slurm.sbatch
 
+# ---- lr 5.6e-3 ---- (2026-11-23: 4e-3 best at TPP20 / TPP50) stable run stops at the TPP50 decay start
+# (iter 14000, STOP_TPP=50); TPP20 / TPP50 branches. The AdamW part (embedding, lm_head) runs at this LR
+# too: watch grad norm and loss spikes.
+J=$(CONFIG=llama3_r1 OPT=muon LR=5.6e-3 MODE=stable STOP_TPP=50 \
+  sbatch --parsable --nodes=1 --job-name=r1-muon-lr5.6e-3-main ladder/launch/slurm.sbatch); echo "lr 5.6e-3 stable: $J"
+CONFIG=llama3_r1 OPT=muon LR=5.6e-3 MODE=branch TPP=20 \
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr5.6e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r1 OPT=muon LR=5.6e-3 MODE=branch TPP=50 \
+  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr5.6e-3-tpp50 ladder/launch/slurm.sbatch
+
 # ---- fit the sweep ----
 # Reads every logs/*.out written so far (unfinished runs are listed, not fitted), so rerun it whenever
 # more jobs finish. Writes logs/lr_fit/lr_fit_llama3_r1_muon.png and logs/lr_fit/lr_points.csv.
