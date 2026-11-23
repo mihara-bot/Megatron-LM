@@ -87,3 +87,11 @@ CONFIG=llama3_r2 OPT=muon LR=4e-3 MODE=branch TPP=20 \
 CONFIG=llama3_r2 OPT=muon LR=4e-3 MODE=branch TPP=50 \
   sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
   --job-name=llama3_r2-muon-lr4e-3-tpp50 ladder/launch/slurm.sbatch
+
+# ---- fit the sweep ----
+# Reads every logs/*.out written so far (unfinished runs are listed, not fitted), so rerun it whenever
+# more jobs finish. Writes logs/lr_fit/lr_fit_llama3_r2_muon.png and logs/lr_fit/lr_points.csv.
+# --window 3: the grid jumps 6e-4 -> 1.4e-3 (x2.3), so a x2 window would leave too few points.
+# Needs numpy, scipy and matplotlib in the active environment.
+python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config llama3_r2 --opt muon \
+  --window 2.0 --noise 1e-3 --out-dir logs/lr_fit
