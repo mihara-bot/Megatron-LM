@@ -73,3 +73,17 @@ CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=branch TPP=20 \
 CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
   sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
   --job-name=llama3_r2-muon-lr2.8e-3-tpp50 ladder/launch/slurm.sbatch
+
+# ---- lr 4e-3 ---- (2026-11-23: R1 optimum at TPP20 is >= 4e-3; R2's is estimated >= 2.7e-3)
+# The stable run stops at the TPP50 decay start (iter 22000, STOP_TPP=50); TPP20 / TPP50 branches.
+# If 2.8e-3 turns out best at TPP100, resubmit this stable job without STOP_TPP: it continues the same run
+# to TPP100.
+J=$(CONFIG=llama3_r2 OPT=muon LR=4e-3 MODE=stable STOP_TPP=50 \
+  sbatch --parsable --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr4e-3-main ladder/launch/slurm.sbatch)
+echo "lr 4e-3 stable: $J"
+CONFIG=llama3_r2 OPT=muon LR=4e-3 MODE=branch TPP=20 \
+  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr4e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r2 OPT=muon LR=4e-3 MODE=branch TPP=50 \
+  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr4e-3-tpp50 ladder/launch/slurm.sbatch
