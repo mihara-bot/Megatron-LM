@@ -51,12 +51,12 @@ mkdir -p logs
 
 
 # ---- lr 2.8e-3 ---- full stable run to TPP100 plus the TPP20 / TPP50 branches
-J=$(CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=stable \
-  sbatch --parsable --nodes=1 --job-name=r1-muon-lr2.8e-3-main ladder/launch/slurm.sbatch); echo "lr 2.8e-3 stable: $J"
-CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=20 \
-  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr2.8e-3-tpp20 ladder/launch/slurm.sbatch
-CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
-  sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr2.8e-3-tpp50 ladder/launch/slurm.sbatch
+# J=$(CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=stable \
+#   sbatch --parsable --nodes=1 --job-name=r1-muon-lr2.8e-3-main ladder/launch/slurm.sbatch); echo "lr 2.8e-3 stable: $J"
+# CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=20 \
+#   sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr2.8e-3-tpp20 ladder/launch/slurm.sbatch
+# CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
+#   sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr2.8e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 4e-3 ---- stable run stops at the TPP50 decay start (iter 14000, STOP_TPP=50); TPP20 / TPP50 branches.
 # If 2.8e-3 turns out best at TPP100, resubmit this stable job without STOP_TPP: it continues the same run
@@ -69,7 +69,7 @@ CONFIG=llama3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
 #   sbatch --nodes=1 --dependency=afterok:$J --job-name=r1-muon-lr4e-3-tpp50 ladder/launch/slurm.sbatch
 
 CONFIG=llama3_r1 OPT=muon LR=4e-3 MODE=stable \
-  sbatch --nodes=1 --qos=polaris_idle --job-name=r1-muon-lr4e-3-main ladder/launch/slurm.sbatch
+  sbatch --nodes=1 --job-name=r1-muon-lr4e-3-main ladder/launch/slurm.sbatch
 
 
 # ---- lr 5.6e-3 ---- (2026-11-23: 4e-3 best at TPP20 / TPP50) stable run stops at the TPP50 decay start
