@@ -22,7 +22,8 @@ Joint fit across the TPPs of a config (>= 2 TPPs):
     L(lr, T) = L*_T + k0 (T/50)^kappa (ln lr - ln lr*_T)^2,   ln lr*_T = x0 + gamma ln(T/50)
 gamma > 0 means the optimal LR grows with the training horizon.
 
-Output: a table on stdout, <out-dir>/lr_fit_<config>_<opt>.png, and <out-dir>/lr_points.csv.
+Output: a table on stdout, and per (config, optimizer) <out-dir>/lr_fit_<config>_<opt>.png and
+<out-dir>/lr_points_<config>_<opt>.csv (one file each, so fitting one rung never overwrites another).
 Needs numpy, scipy and matplotlib.
 """
 import argparse
@@ -407,12 +408,12 @@ def plot(config, opt, runs, pts_by_t, fits, joint, path, window, noise):
     ]
     if joint:
         l2 = [
-            r"$\bf{Fit\ 2:\ joint\ across\ TPPs}$   nonlinear least squares, shared shape across horizons",
+            r"$\bf{Fit\ 2:\ joint\ across\ TPPs}$   nonlinear least squares, "
+            + rf"{joint['n']} points, {len(joint['p'])} params, residual RMS $= {joint['rms'] * 1e3:.2f}\times10^{{-3}}$",
             r"$L(\eta, T) = L^*_T + k_0\,(T/50)^{\kappa}\,\left[\ln\eta - \ln\eta^*_{50} - \gamma\ln(T/50)\right]^2$",
             rf"$\eta^*_{{50}} = {sci(math.exp(joint['x0']))}$,  "
             + rf"$\gamma = {joint['gamma']:+.2f} \pm {joint['gamma_se']:.2f}$,  "
-            + rf"$k_0 = {joint['k0']:.4f}$,  $\kappa = {joint['kappa']:+.2f} \pm {joint['kappa_se']:.2f}$;  "
-            + rf"{joint['n']} points / {len(joint['p'])} parameters, residual RMS $= {joint['rms'] * 1e3:.2f}\times10^{{-3}}$",
+            + rf"$k_0 = {joint['k0']:.4f}$,  $\kappa = {joint['kappa']:+.2f} \pm {joint['kappa_se']:.2f}$",
         ]
     else:
         l2 = [r"$\bf{Fit\ 2:\ joint\ across\ TPPs}$   needs at least 2 TPPs with enough points"]
@@ -437,7 +438,7 @@ def main():
     ap.add_argument("--noise", type=float, default=1e-3,
                     help="assumed per-run loss noise for the lr* interval (0 to skip)")
     ap.add_argument("--out-dir", default="logs/lr_fit",
-                    help="folder for the figures (lr_fit_<config>_<opt>.png) and lr_points.csv; created if missing")
+                    help="folder for lr_fit_<config>_<opt>.png and lr_points_<config>_<opt>.csv; created if missing")
     ap.add_argument("--no-plot", action="store_true")
     args = ap.parse_args()
 
@@ -450,14 +451,14 @@ def main():
         sys.exit("no runs found")
     rows = endpoints(runs)
     os.makedirs(args.out_dir, exist_ok=True)
-    with open(os.path.join(args.out_dir, "lr_points.csv"), "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(sorted(rows, key=lambda r: (r["config"], r["opt"], r["tpp"], r["lr"])))
 
     rng = np.random.default_rng(0)
     for config, opt in sorted({(r["config"], r["opt"]) for r in rows}):
         rs = [r for r in rows if r["config"] == config and r["opt"] == opt]
+        with open(os.path.join(args.out_dir, f"lr_points_{config}_{opt}.csv"), "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(rs[0]))
+            w.writeheader()
+            w.writerows(sorted(rs, key=lambda r: (r["tpp"], r["lr"])))
         lrs = sorted({r["lr"] for r in rs})
         ts = sorted({r["tpp"] for r in rs})
         table = {(r["lr"], r["tpp"]): r for r in rs}
