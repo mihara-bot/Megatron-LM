@@ -42,15 +42,15 @@ mkdir -p logs
 # uses the R1 grid points 1.4e-3 / 2e-3 / 2.8e-3 (same values as R1 for a direct comparison).
 
 # ---- lr 1.4e-3 ----
-J=$(CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=stable \
-  sbatch --parsable --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr1.4e-3-main ladder/launch/slurm.sbatch)
-echo "lr 1.4e-3 stable: $J"
-CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
-  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
-  --job-name=llama3_r2-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
-CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
-  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
-  --job-name=llama3_r2-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
+# J=$(CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=stable \
+#   sbatch --parsable --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr1.4e-3-main ladder/launch/slurm.sbatch)
+# echo "lr 1.4e-3 stable: $J"
+# CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
+#   sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+#   --job-name=llama3_r2-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
+# CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
+#   sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+#   --job-name=llama3_r2-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 2e-3 ----
 J=$(CONFIG=llama3_r2 OPT=muon LR=2e-3 MODE=stable \
@@ -64,15 +64,15 @@ CONFIG=llama3_r2 OPT=muon LR=2e-3 MODE=branch TPP=50 \
   --job-name=llama3_r2-muon-lr2e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 2.8e-3 ----
-J=$(CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=stable \
-  sbatch --parsable --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr2.8e-3-main ladder/launch/slurm.sbatch)
-echo "lr 2.8e-3 stable: $J"
-CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=branch TPP=20 \
-  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
-  --job-name=llama3_r2-muon-lr2.8e-3-tpp20 ladder/launch/slurm.sbatch
-CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
-  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
-  --job-name=llama3_r2-muon-lr2.8e-3-tpp50 ladder/launch/slurm.sbatch
+# J=$(CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=stable \
+#   sbatch --parsable --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr2.8e-3-main ladder/launch/slurm.sbatch)
+# echo "lr 2.8e-3 stable: $J"
+# CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=branch TPP=20 \
+#   sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+#   --job-name=llama3_r2-muon-lr2.8e-3-tpp20 ladder/launch/slurm.sbatch
+# CONFIG=llama3_r2 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
+#   sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+#   --job-name=llama3_r2-muon-lr2.8e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 4e-3 ---- (2026-11-23: R1 optimum at TPP20 is >= 4e-3; R2's is estimated >= 2.7e-3)
 # The stable run stops at the TPP50 decay start (iter 22000, STOP_TPP=50); TPP20 / TPP50 branches.
@@ -94,15 +94,15 @@ CONFIG=llama3_r2 OPT=muon LR=4e-3 MODE=branch TPP=50 \
 # only one of the two per LR: scancel the standard jobs of that LR first, or paste only these blocks.
 
 # ---- lr 1.4e-3 (idle) ----
-J=$(CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=stable \
-  sbatch --parsable --qos=polaris_idle --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr1.4e-3-main ladder/launch/slurm.sbatch)
-echo "lr 1.4e-3 stable (idle): $J"
-CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
-  sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
-  --job-name=llama3_r2-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
-CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
-  sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
-  --job-name=llama3_r2-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
+# J=$(CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=stable \
+#   sbatch --parsable --qos=polaris_idle --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr1.4e-3-main ladder/launch/slurm.sbatch)
+# echo "lr 1.4e-3 stable (idle): $J"
+# CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
+#   sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+#   --job-name=llama3_r2-muon-lr1.4e-3-tpp20 ladder/launch/slurm.sbatch
+# CONFIG=llama3_r2 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
+#   sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+#   --job-name=llama3_r2-muon-lr1.4e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 2e-3 (idle) ----
 J=$(CONFIG=llama3_r2 OPT=muon LR=2e-3 MODE=stable \
