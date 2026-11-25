@@ -115,10 +115,26 @@ CONFIG=llama3_r2 OPT=muon LR=2e-3 MODE=branch TPP=50 \
   sbatch --qos=polaris_idle --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
   --job-name=llama3_r2-muon-lr2e-3-tpp50 ladder/launch/slurm.sbatch
 
+# ---- lr 1e-3 ---- (2026-11-25: fills the 6e-4 -> 1.4e-3 gap on the low side of lr* ~1.6-2.1e-3, and
+# makes the R2 grid near the optimum 1e-3 / 1.4e-3 / 2e-3 / 2.8e-3 / 4e-3, the same points as R1, so both
+# rungs are fitted on the same LRs and window.) Full stable run to TPP100: the low side matters most there.
+# The branches wait for the whole stable run (afterok). To start them earlier, submit them without
+# --dependency once the stable run has saved iteration 8800 (TPP20) / 22000 (TPP50).
+J=$(CONFIG=llama3_r2 OPT=muon LR=1e-3 MODE=stable \
+  sbatch --parsable --nodes=2 --time=72:00:00 --job-name=llama3_r2-muon-lr1e-3-main ladder/launch/slurm.sbatch)
+echo "lr 1e-3 stable: $J"
+CONFIG=llama3_r2 OPT=muon LR=1e-3 MODE=branch TPP=20 \
+  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr1e-3-tpp20 ladder/launch/slurm.sbatch
+CONFIG=llama3_r2 OPT=muon LR=1e-3 MODE=branch TPP=50 \
+  sbatch --nodes=2 --time=24:00:00 --dependency="afterok:$J" \
+  --job-name=llama3_r2-muon-lr1e-3-tpp50 ladder/launch/slurm.sbatch
+
 # ---- fit the sweep ----
 # Reads every logs/*.out written so far (unfinished runs are listed, not fitted), so rerun it whenever
 # more jobs finish. Writes logs/lr_fit/lr_fit_llama3_r2_muon.png and logs/lr_fit/lr_points_llama3_r2_muon.csv.
-# --window 3: the grid jumps 6e-4 -> 1.4e-3 (x2.3), so a x2 window would leave too few points.
+# --window 2, the same as R1. It needs 2e-3 (and 1e-3) to be finished: until then TPP50 / TPP100 have
+# only 1.4e-3 and 2.8e-3 within x2 of the best LR and are not fitted. Use --window 3 for an interim look.
 # Needs numpy, scipy and matplotlib in the active environment.
 python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config llama3_r2 --opt muon \
   --window 2.0 --noise 1e-3 --out-dir logs/lr_fit
