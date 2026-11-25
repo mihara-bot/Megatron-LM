@@ -38,28 +38,27 @@ mkdir -p logs
 #   standard QoS (not preempted, cap 32 GPUs): 2e-3, 2.8e-3, 4e-3 (1 node each)
 #   idle QoS (preemptible, resumes from the latest checkpoint): 1.4e-3, 5.6e-3
 #
-# Dataset index. The first job of a new dataset builds the index in $OUT_ROOT/data_cache, and two jobs
-# building the same files at once can read each other's half-written files. So only 2.8e-3 starts
-# freely; the other stable jobs start no earlier than INDEX_WAIT minutes after it has started
-# (--dependency=after:<job>+<minutes>). Once the index exists (the 2.8e-3 log shows the datasets built),
-# the dependency can be dropped. The same applies between this script and run_qwen3_r2_lr_sweep.sh,
-# which share the validation index: submit R2 once the R1 2.8e-3 job is past dataset building.
-INDEX_WAIT=${INDEX_WAIT:-20}
+# Dependencies, as in the Llama3 sweeps: within each LR block of 3 jobs, the TPP20 / TPP50 branches wait
+# for their own stable job (afterok); the LR blocks are independent of each other.
+# All LRs of this rung share one dataset index in $OUT_ROOT/data_cache, built by the first job that gets
+# there. Megatron writes it without a lock, so two jobs reaching dataset building in the same few
+# seconds can make one of them fail while loading the index (a numpy load error). Its branches then
+# never start (DependencyNeverSatisfied): scancel them and resubmit that LR block.
 
-# ---- lr 2.8e-3 (standard QoS) ---- first job: builds the dataset index
-J0=$(CONFIG=qwen3_r1 OPT=muon LR=2.8e-3 MODE=stable \
+# ---- lr 2.8e-3 (standard QoS) ----
+J=$(CONFIG=qwen3_r1 OPT=muon LR=2.8e-3 MODE=stable \
   sbatch --parsable --nodes=1 --time=72:00:00 --job-name=qwen3_r1-muon-lr2.8e-3-main ladder/launch/slurm.sbatch)
-echo "lr 2.8e-3 stable: $J0"
+echo "lr 2.8e-3 stable: $J"
 CONFIG=qwen3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=20 \
-  sbatch --nodes=1 --time=24:00:00 --dependency="afterok:$J0" \
+  sbatch --nodes=1 --time=24:00:00 --dependency="afterok:$J" \
   --job-name=qwen3_r1-muon-lr2.8e-3-tpp20 ladder/launch/slurm.sbatch
 CONFIG=qwen3_r1 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
-  sbatch --nodes=1 --time=24:00:00 --dependency="afterok:$J0" \
+  sbatch --nodes=1 --time=24:00:00 --dependency="afterok:$J" \
   --job-name=qwen3_r1-muon-lr2.8e-3-tpp50 ladder/launch/slurm.sbatch
 
 # ---- lr 2e-3 (standard QoS) ----
 J=$(CONFIG=qwen3_r1 OPT=muon LR=2e-3 MODE=stable \
-  sbatch --parsable --nodes=1 --time=72:00:00 --dependency="after:$J0+$INDEX_WAIT" \
+  sbatch --parsable --nodes=1 --time=72:00:00 \
   --job-name=qwen3_r1-muon-lr2e-3-main ladder/launch/slurm.sbatch)
 echo "lr 2e-3 stable: $J"
 CONFIG=qwen3_r1 OPT=muon LR=2e-3 MODE=branch TPP=20 \
@@ -72,7 +71,7 @@ CONFIG=qwen3_r1 OPT=muon LR=2e-3 MODE=branch TPP=50 \
 # ---- lr 4e-3 (standard QoS) ---- full run to TPP100: Llama3-R1's 4e-3 lost to 2.8e-3 there, which is
 # what brackets lr*_100 from above.
 J=$(CONFIG=qwen3_r1 OPT=muon LR=4e-3 MODE=stable \
-  sbatch --parsable --nodes=1 --time=72:00:00 --dependency="after:$J0+$INDEX_WAIT" \
+  sbatch --parsable --nodes=1 --time=72:00:00 \
   --job-name=qwen3_r1-muon-lr4e-3-main ladder/launch/slurm.sbatch)
 echo "lr 4e-3 stable: $J"
 CONFIG=qwen3_r1 OPT=muon LR=4e-3 MODE=branch TPP=20 \
@@ -84,7 +83,7 @@ CONFIG=qwen3_r1 OPT=muon LR=4e-3 MODE=branch TPP=50 \
 
 # ---- lr 1.4e-3 (idle QoS) ---- full run to TPP100: the low side, in case depth pulls lr* down.
 J=$(CONFIG=qwen3_r1 OPT=muon LR=1.4e-3 MODE=stable \
-  sbatch --parsable --qos=polaris_idle --nodes=1 --time=72:00:00 --dependency="after:$J0+$INDEX_WAIT" \
+  sbatch --parsable --qos=polaris_idle --nodes=1 --time=72:00:00 \
   --job-name=qwen3_r1-muon-lr1.4e-3-main ladder/launch/slurm.sbatch)
 echo "lr 1.4e-3 stable (idle): $J"
 CONFIG=qwen3_r1 OPT=muon LR=1.4e-3 MODE=branch TPP=20 \
@@ -99,7 +98,7 @@ CONFIG=qwen3_r1 OPT=muon LR=1.4e-3 MODE=branch TPP=50 \
 # If 4e-3 turns out best at TPP100, resubmit this stable job without STOP_TPP: it continues the same run
 # to TPP100. The AdamW part (embedding, lm_head) runs at this LR too: watch grad norm and loss spikes.
 J=$(CONFIG=qwen3_r1 OPT=muon LR=5.6e-3 MODE=stable STOP_TPP=50 \
-  sbatch --parsable --qos=polaris_idle --nodes=1 --time=72:00:00 --dependency="after:$J0+$INDEX_WAIT" \
+  sbatch --parsable --qos=polaris_idle --nodes=1 --time=72:00:00 \
   --job-name=qwen3_r1-muon-lr5.6e-3-main ladder/launch/slurm.sbatch)
 echo "lr 5.6e-3 stable (idle): $J"
 CONFIG=qwen3_r1 OPT=muon LR=5.6e-3 MODE=branch TPP=20 \
