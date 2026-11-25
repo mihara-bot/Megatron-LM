@@ -32,8 +32,13 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 
-export TOKENIZER=${TOKENIZER:-/fast/users/zhuangxinlin/tokenizers/llama-3}
-export DATA_ROOT=${DATA_ROOT:-/fast/users/zhuangxinlin/megatron_data/llama3/climbmix_v1_m1}
+# Each family has its own tokenizer and tokenized data; the family is the config's prefix (qwen3_r1 -> qwen3).
+case "${CONFIG:-}" in
+    qwen3_*) FAMILY=qwen3;  DEFAULT_TOKENIZER=/fast/users/zhuangxinlin/tokenizers/qwen3 ;;
+    *)       FAMILY=llama3; DEFAULT_TOKENIZER=/fast/users/zhuangxinlin/tokenizers/llama-3 ;;
+esac
+export TOKENIZER=${TOKENIZER:-$DEFAULT_TOKENIZER}
+export DATA_ROOT=${DATA_ROOT:-/fast/users/zhuangxinlin/megatron_data/$FAMILY/climbmix_v1_m1}
 export TRAIN_DATA=${TRAIN_DATA:-$DATA_ROOT/train_merged}
 export VALID_DATA=${VALID_DATA:-$DATA_ROOT/val_all/val}
 export OUT_ROOT=${OUT_ROOT:-/fast/users/zhuangxinlin/ckpts}

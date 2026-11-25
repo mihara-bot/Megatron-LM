@@ -8,6 +8,7 @@
 #   24 layers 736,174,080 + final norm 1,536 + lm_head 1536*128256 197,001,216 = 933,176,832
 N_EFF=933176832
 
+TOKENIZER_VOCAB=128256     # len(Llama-3.1 tokenizer); ladder/data/check_tokenizer.py checks it before launch
 SEQ_LEN=4096
 GBS=384                   # 384 x 4096 = 1.5M tokens per iteration
 MBS=${MBS:-4}             # per-GPU micro batch; GBS / (MBS * data-parallel size) = grad-accum steps

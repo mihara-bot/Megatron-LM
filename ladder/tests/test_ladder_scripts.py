@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-CONFIGS = sorted(p.stem for p in (REPO / "ladder/configs").glob("llama3_r*.sh"))
+CONFIGS = sorted(p.stem for f in ("llama3", "qwen3") for p in (REPO / "ladder/configs").glob(f"{f}_r*.sh"))
 FAKE_ENV = {"TRAIN_DATA": "x", "VALID_DATA": "x", "TOKENIZER": "x"}
 VALID_TAG = "lm loss validation"   # what Megatron's torch SummaryWriter writes, spaces included
 
@@ -243,10 +243,13 @@ def test_model_numbers_match_configs(tmp_path):
     for config in CONFIGS:
         cmd_file = tmp_path / f"cmd_{config}.sh"
         cmd_file.write_text(shlex.join(["pretrain_gpt.py", *train_cmd(config, tmp_path)]))
-        n_eff, fpt = sc.model_numbers(sc.parse_cmd(cmd_file), 128256)
+        n_eff, fpt = sc.model_numbers(sc.parse_cmd(cmd_file), sc.FAMILY_VOCAB[config.split("_")[0]])
         assert n_eff == config_vars(config)["N_EFF"], config
         if config == "llama3_r1":   # hand count of Megatron's num_floating_point_operations (causal attention)
             fwd = 18 * (4 * 1024 * (1024 + 1024 * 2 / 8) + 2 * 4096 * 1024 + 6 * 1024 * 3584) + 2 * 1024 * 128256
+            assert fpt == pytest.approx(3 * fwd)
+        if config == "qwen3_r1":    # attention width 16*128 = 2048 != d, 8 KV groups
+            fwd = 28 * (4 * 2048 * (768 + 768 * 8 / 16) + 2 * 4096 * 2048 + 6 * 768 * 2304) + 2 * 768 * 151680
             assert fpt == pytest.approx(3 * fwd)
 
 

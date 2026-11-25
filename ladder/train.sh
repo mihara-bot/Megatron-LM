@@ -27,6 +27,7 @@
 #   LR, MBS, SEED, RUN (run directory name, default <CONFIG>_<OPT>_lr<LR>), WANDB_PROJECT, VENV
 #   NNODES, NODE_RANK, MASTER_ADDR, MASTER_PORT, GPUS_PER_NODE   (set by the launchers)
 #   DRY_RUN=1     print the plan and the command, launch nothing
+#   SKIP_TOKENIZER_CHECK=1   skip ladder/data/check_tokenizer.py (tokenizer vs config vs data)
 #   EXTRA_ARGS    appended to the Megatron arguments
 set -euo pipefail
 
@@ -210,6 +211,15 @@ fi
 if [ "${DRY_RUN:-0}" = 1 ]; then
     printf '%q ' pretrain_gpt.py "${ARGS[@]}"; echo
     exit 0
+fi
+
+# Tokenizer must match the config (TOKENIZER_VOCAB) and the data (manifest written by tokenize_dataset.py).
+# A Llama-3 tokenizer on Qwen3 data or the reverse trains without any error, so stop here instead.
+# Node 0 only; on SLURM, srun --kill-on-bad-exit takes the other nodes down with it.
+if [ "$NODE_RANK" = 0 ] && [ "${SKIP_TOKENIZER_CHECK:-0}" != 1 ]; then
+    : "${TOKENIZER_VOCAB:?ladder/configs/${CONFIG}.sh must set TOKENIZER_VOCAB}"
+    python ladder/data/check_tokenizer.py --tokenizer "$TOKENIZER" --expect-vocab "$TOKENIZER_VOCAB" \
+        "$TRAIN_DATA" "${VALID_LIST[@]}"
 fi
 
 mkdir -p "$RUN_DIR/tb" "$RUN_DIR/ckpt" "$OUT_ROOT/data_cache"

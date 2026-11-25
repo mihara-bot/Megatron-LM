@@ -32,11 +32,17 @@ FIELDS = ["run", "tag", "config", "opt", "lr", "layers", "hidden", "ffn", "heads
 
 
 # ---- model arithmetic ---------------------------------------------------------------------------
+# Padded vocab (Megatron pads len(tokenizer) to a multiple of 128 at TP=1) per config family.
+FAMILY_VOCAB = {"llama3": 128256, "qwen3": 151680}   # Llama-3.1: 128256; Qwen3: 151669 -> 151680
+
+
 def model_numbers(a, vocab):
-    """N_eff and training FLOPs per token of a dense Llama-style GPT (SwiGLU, GQA, untied, no bias)."""
+    """N_eff and training FLOPs per token of a dense Llama/Qwen3-style GPT (SwiGLU, GQA, untied, no bias)."""
     L, d, f, H, g, c, s = (a[k] for k in ("layers", "hidden", "ffn", "heads", "groups", "kv_channels", "seq"))
     p = c * H                                               # attention projection width
     layer = d * p + 2 * d * c * g + p * d + 3 * d * f + 2 * d
+    if a.get("qk_norm"):
+        layer += 2 * c                                      # q / k RMSNorm (Qwen3), no FLOPs counted
     n_eff = L * layer + d + d * vocab                       # + final norm + lm_head
     fwd = L * (4 * p * (d + d * g / H) + 2 * s * p + 6 * d * f) + 2 * d * vocab
     return n_eff, 3 * fwd
@@ -57,6 +63,7 @@ def parse_cmd(path):
     }
     a["groups"] = val("--num-query-groups", int, a["heads"]) if "--group-query-attention" in toks else a["heads"]
     a["kv_channels"] = val("--kv-channels", int, a["hidden"] // a["heads"])
+    a["qk_norm"] = "--qk-layernorm" in toks
     if "--num-experts" in toks:
         raise ValueError("MoE runs are not supported by model_numbers()")
     return a
@@ -94,13 +101,15 @@ def cmd_collect(args):
                 done = max(vals) if vals else 0
                 print(f"skip {run}/{tag}: no validation at end iteration {end} (latest {done})", file=sys.stderr)
                 continue
-            n_eff, fpt = model_numbers(a, args.vocab)
-            tokens = end * a["gbs"] * a["seq"]
             m = re.match(r"(.+)_(adam|adamw|muon)_lr", run)
+            config = m.group(1) if m else run
+            vocab = args.vocab or FAMILY_VOCAB.get(config.split("_")[0], 128256)
+            n_eff, fpt = model_numbers(a, vocab)
+            tokens = end * a["gbs"] * a["seq"]
             rows.append({
-                "run": run, "tag": tag, "config": m.group(1) if m else run, "opt": a["opt"], "lr": a["lr"],
+                "run": run, "tag": tag, "config": config, "opt": a["opt"], "lr": a["lr"],
                 **{k: a[k] for k in ("layers", "hidden", "ffn", "heads", "groups", "kv_channels", "seq", "gbs")},
-                "vocab": args.vocab, "n_eff": n_eff, "flops_per_token": fpt, "iteration": end,
+                "vocab": vocab, "n_eff": n_eff, "flops_per_token": fpt, "iteration": end,
                 "tokens": tokens, "tpp": tokens / n_eff, "loss": vals[end],
             })
     with open(args.csv, "w", newline="") as fh:
@@ -309,7 +318,8 @@ def main():
     c.add_argument("--csv", default="ladder_results.csv")
     c.add_argument("--valid-tag", default="lm loss validation",
                    help="TensorBoard scalar; with several validation sets 'lm loss validation-<name>'")
-    c.add_argument("--vocab", type=int, default=128256)
+    c.add_argument("--vocab", type=int, default=0,
+                   help="padded vocab for every run (default: by config family, see FAMILY_VOCAB)")
     for name in ("lr", "fit"):
         s = sub.add_parser(name)
         s.add_argument("--csv", default="ladder_results.csv")

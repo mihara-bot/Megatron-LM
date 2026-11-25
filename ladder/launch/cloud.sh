@@ -9,8 +9,13 @@
 # Defaults below are this cluster's paths; override any of them with environment variables.
 set -euo pipefail
 
-export TOKENIZER=${TOKENIZER:-/mnt/users/zhuangxinlin/ckpt/Llama3.1-8B}
-export DATA_ROOT=${DATA_ROOT:-/mnt/oss-zhuangxinlin/megatron_data/llama3/climbmix_v1_m1}
+# Each family has its own tokenizer and tokenized data; the family is the config's prefix (qwen3_r1 -> qwen3).
+case "${CONFIG:-}" in
+    qwen3_*) FAMILY=qwen3;  DEFAULT_TOKENIZER=/mnt/users/zhuangxinlin/ckpt/Qwen3-0.6B-Base ;;
+    *)       FAMILY=llama3; DEFAULT_TOKENIZER=/mnt/users/zhuangxinlin/ckpt/Llama3.1-8B ;;
+esac
+export TOKENIZER=${TOKENIZER:-$DEFAULT_TOKENIZER}
+export DATA_ROOT=${DATA_ROOT:-/mnt/oss-zhuangxinlin/megatron_data/$FAMILY/climbmix_v1_m1}
 export TRAIN_DATA=${TRAIN_DATA:-$DATA_ROOT/train_merged}
 export VALID_DATA=${VALID_DATA:-$DATA_ROOT/val_all/val}
 export OUT_ROOT=${OUT_ROOT:-/mnt/oss-zhuangxinlin/ladder}

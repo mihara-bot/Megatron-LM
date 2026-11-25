@@ -3,9 +3,16 @@
 # OUT=/mnt/oss-zhuangxinlin/megatron_data/llama3       # Megatron 格式数据的输出目录
 # WORKERS=64                                           # 按节点的 CPU 核数调整
 
-TOK=/fast/users/zhuangxinlin/tokenizers/llama-3
+# FAMILY 选择 tokenizer 和输出目录（llama3 | qwen3），与 ladder/launch/*.sh 按 config 前缀取的默认路径一致。
+# Qwen3 必须用 base 版 tokenizer：追加的 EOS 是 tokenizer.eos_token，base 为 <|endoftext|>，instruct 为 <|im_end|>。
+FAMILY=${FAMILY:-llama3}
+case $FAMILY in
+    llama3) TOK=/fast/users/zhuangxinlin/tokenizers/llama-3 ;;
+    qwen3)  TOK=/fast/users/zhuangxinlin/tokenizers/qwen3 ;;
+    *) echo "FAMILY 须为 llama3 或 qwen3，当前为 $FAMILY" >&2; exit 1 ;;
+esac
 SRC=/fast/users/zhuangxinlin/data/climbmix_v1
-OUT=/fast/users/zhuangxinlin/megatron_data/llama3
+OUT=/fast/users/zhuangxinlin/megatron_data/$FAMILY
 WORKERS=64
 
 
