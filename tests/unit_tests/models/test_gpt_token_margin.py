@@ -248,10 +248,19 @@ def test_training_loss_and_grads_match_definition(model_parallel, mode, d, rever
     final_w = model.decoder.final_layernorm.weight
     assert final_w.requires_grad == (mode != "hfn")
     tokens, position_ids, labels, mask = _inputs()
-    store, handle = _capture_final_norm(model)
-    loss = model(tokens, position_ids, None, labels=labels, loss_mask=mask)   # [b, s]
-    handle.remove()
+    named = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+    params = [p for _, p in named]
 
+    # Transformer Engine's fused ops free their saved tensors after one backward (retain_graph
+    # does not keep them), so the model path and the reference each get their own forward and a
+    # single backward. Dropout is 0: both forwards compute the same h.
+    loss = model(tokens, position_ids, None, labels=labels, loss_mask=mask)   # [b, s]
+    report = pop_token_margin_report(model)
+    g_model = torch.autograd.grad((loss * mask).sum(), params, allow_unused=True)
+
+    store, handle = _capture_final_norm(model)
+    model(tokens, position_ids, None)          # labels None: logits only, no margin, no report
+    handle.remove()
     logits, h_norm = _reference_logits(model, store["h"])                   # [s, b, V], [s, b]
     signed_d = -d if reverse else d
     margin = signed_d * (scale if mode == "hfn" else h_norm)
@@ -262,24 +271,20 @@ def test_training_loss_and_grads_match_definition(model_parallel, mode, d, rever
     if mode == "sfn":
         ref = ref + t * (h_norm - scale) ** 2
     ref = ref.T
-    torch.testing.assert_close(loss, ref, rtol=2e-3, atol=2e-3)
-
-    params = [p for p in model.parameters() if p.requires_grad]
-    g_model = torch.autograd.grad((loss * mask).sum(), params, retain_graph=True, allow_unused=True)
+    torch.testing.assert_close(loss.detach(), ref.detach(), rtol=2e-3, atol=2e-3)
     g_ref = torch.autograd.grad((ref * mask).sum(), params, allow_unused=True)
-    for (name, _), gm, gr in zip(
-        [(n, p) for n, p in model.named_parameters() if p.requires_grad], g_model, g_ref
-    ):
+
+    for (name, _), gm, gr in zip(named, g_model, g_ref):
         if gr is None:
             assert gm is None or gm.abs().max() == 0, name
             continue
         torch.testing.assert_close(gm, gr, rtol=5e-3, atol=1e-4, msg=lambda m: f"{name}: {m}")
 
-    report = pop_token_margin_report(model)
     expected = {"ce loss", "margin r", "margin logit m", "lm head input norm", "logit max", "logit rms"}
     assert set(report) == expected | ({"sfn sq dev"} if mode == "sfn" else set())
-    plain_ce = F.cross_entropy(logits.reshape(-1, VOCAB), labels.T.reshape(-1), reduction="none")
-    plain_ce = plain_ce.reshape(SEQ, BATCH).T
+    with torch.no_grad():
+        plain_ce = F.cross_entropy(logits.reshape(-1, VOCAB), labels.T.reshape(-1), reduction="none")
+        plain_ce = plain_ce.reshape(SEQ, BATCH).T
     torch.testing.assert_close(
         report["ce loss"], torch.stack([(plain_ce * mask).sum(), mask.sum()]).float(), rtol=2e-3, atol=2e-2
     )
