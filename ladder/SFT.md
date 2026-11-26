@@ -59,7 +59,9 @@ SFT_DATA_DIR=$DATA/sft_megatron/omi2_500k_ep10_llama3 ENTRY=ladder/sft/train_sft
   / LR / HEAD vars as `ladder/train.sh` names it. Only the weights are loaded, through `--pretrained-checkpoint`.
   A rerun resumes from the SFT checkpoints.
 - head: hfn -> hfn (s kept, final norm frozen), nfn / sfn -> nfn, plain -> plain; all with d = 0.
-- optimizer: the pretraining `ladder/configs/opt/<OPT>.sh`, peak LR = LR / 3 (`SFT_LR`), 3% warmup, cosine to 0.
+- optimizer: Muon (`ladder/configs/opt/muon.sh`) by default, whatever the pretraining run used (`OPT` only names that
+  run, default muon); `SFT_OPT=adamw` switches and adds `_adamw` to the SFT run name. Peak LR = pretraining LR / 3
+  (`SFT_LR`), 3% warmup, cosine to 0.
 - batch: `--use-varlen-dataset` packs examples online (dp_balanced, `--max-seqlen-per-dp-cp-rank 4096`), and the
   global batch counts examples: by default the pipeline's examples per step rounded to the data-parallel size
   (8 GPUs: 312 examples, 16025 iterations; 16 GPUs: 320, 15625; pipeline: 15851). `SFT_GBS` overrides it.
@@ -69,34 +71,43 @@ What differs from the pipeline: the packing (online and balanced over the ranks,
 rows) and therefore which examples share a step. The examples, their order, tokens, mask, optimizer, LR schedule
 and the number of steps all match.
 
-## 3. Offline eval
+## 3. Export and offline eval
+
+Two steps, two environments; `ladder/sft/run_sft.sh` has both, chained after training.
 
 ```bash
-sbatch -J sft-eval -A polaris -p polaris -N 1 --ntasks-per-node=1 --gpus-per-node=1 --cpus-per-task=16 \
-  --mem=128G -t 24:00:00 -o logs/%x-%j.out \
-  --export=ALL,CONFIG=llama3_r1,OPT=muon,LR=2.8e-3,HEAD=hfn,MARGIN_D=0.02,PRETRAIN_TAG=tpp100,VLLM_PYTHON=<vllm env>/bin/python \
-  --wrap 'srun --ntasks=1 ht-run bash ladder/sft/eval.sh'
-# ITERS=all: every epoch checkpoint; TARGET=pretrained: the start checkpoint (pre-SFT reference);
-# TASKS / NUM_SAMPLES / MAX_PROBLEMS: quick subsets (written to their own directories)
+# export (1 GPU, Megatron env): Megatron checkpoints -> HF directories
+CONFIG=llama3_r1 OPT=muon LR=2.8e-3 HEAD=hfn MARGIN_D=0.02 PRETRAIN_TAG=tpp100 ITERS=all \
+  sbatch -J sft-export -A polaris -p polaris -N 1 --ntasks-per-node=1 --gpus-per-node=1 --cpus-per-task=16 \
+  --mem=128G -t 04:00:00 -o logs/%x-%j.out --wrap 'srun --ntasks=1 ht-run bash ladder/sft/export.sh'
+# eval (1 GPU, vLLM env): MODEL = HF directories
+MODEL="$OUT_ROOT/sft/<sft run>/hf/iter_*" VLLM_PYTHON=<vllm env>/bin/python \
+  sbatch -J sft-eval -A polaris -p polaris -N 1 --ntasks-per-node=1 --gpus-per-node=1 --cpus-per-task=16 \
+  --mem=128G -t 24:00:00 -o logs/%x-%j.out --wrap 'srun --ntasks=1 ht-run bash ladder/sft/eval.sh'
 ```
 
-`ladder/sft/eval.sh` exports each checkpoint with `ladder/export/export_hf.sh` (plain Llama / Qwen3, head folded,
-Megatron vs HF logits checked), then runs `ladder/sft/eval/eval_vllm.py`. The settings are in
-`ladder/sft/eval/math_passk.yaml`, which has the pipeline's tasks, prompts (the SFT template; Countdown's own
-few-shot prompt and stop) and offline settings: 64 samples (T 0.6, top_p 0.95) + greedy, all problems,
-GSM8K 512 / others 1024 new tokens. Grading uses `math_grader.py`, copied unchanged from the pipeline.
-Prompts are tokenized without BOS and passed to vLLM as token ids.
-Results: `<sft dir>/eval/iter_<N>/{summary.json,<task>.jsonl}` plus one line per checkpoint in
-`<sft dir>/eval/summary.jsonl` (keys as the pipeline's: `gsm8k/pass@1`, `math500/greedy_acc`, ...).
+`ladder/sft/export.sh` takes the run's variables (as train_sft.sh) and writes `<sft dir>/hf/iter_<N>` with
+`ladder/export/export_hf.sh`: a plain Llama / Qwen3 with the head folded, Megatron vs HF logits checked.
+`ITERS=latest|all|<list>`; `TARGET=pretrained` exports the start checkpoint instead (the pre-SFT reference,
+`<pretraining run>/hf/<PRETRAIN_TAG>_iter<N>`). Directories that already have `export_meta.json` are kept.
+
+`ladder/sft/eval.sh` takes only `MODEL`: one or more HF directories, any HF causal LM (e.g. an official base
+model as a reference). Globs expand inside the job and models run in iteration order. It runs
+`ladder/sft/eval/eval_vllm.py` with `ladder/sft/eval/math_passk.yaml`, which has the pipeline's tasks, prompts (the
+SFT template; Countdown's own few-shot prompt and stop) and offline settings: 64 samples (T 0.6, top_p 0.95) +
+greedy, all problems, GSM8K 512 / others 1024 new tokens. Grading uses `math_grader.py`, copied unchanged from
+the pipeline. Prompts are tokenized without BOS and passed to vLLM as token ids.
+Results: `<X>/eval/<name>/{summary.json,<task>.jsonl}` for a model at `<X>/hf/<name>` (`EVAL_DIR` overrides for
+a single model), plus one line per model in `<X>/eval/summary.jsonl` (keys as the pipeline's: `gsm8k/pass@1`,
+`math500/greedy_acc`, ...). `TASKS` / `NUM_SAMPLES` / `MAX_PROBLEMS` give quick subsets in their own directories.
 vLLM samples differently from HF generate, so per-sample outputs differ from the pipeline's, but the metric
 distributions are the same.
 
 vLLM is not in the NGC image: point `VLLM_PYTHON` at an environment that has it (and transformers, pyarrow,
-pyyaml; sympy + antlr4-python3-runtime for the MATH equivalence check). The export runs in the Megatron
-environment (`VENV`).
+pyyaml; sympy + antlr4-python3-runtime for the MATH equivalence check).
 
 ## Tests
 
 `python -m pytest ladder/tests/test_sft_scripts.py -p no:cacheprovider -o addopts=""` (CPU): data preparation
 against the pipeline's functions (when ../pretrain_LLM_pipeline exists), boundary / overlong drops, schedule,
-eval problems / grading / summary, and the train / eval launchers' plans.
+eval problems / grading / summary, and the train / export / eval launchers' plans.

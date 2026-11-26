@@ -13,15 +13,16 @@
 # Same as the pipeline SFT:
 #   data      ladder/sft/prepare_sft_data.py output: prompt + response + EOS, prompt masked, the pipeline's
 #             per-epoch order; Megatron reads train.parquet front to back (--use-varlen-dataset, identity template)
-#   optimizer the pretraining one (ladder/configs/opt/<OPT>.sh), peak LR = pretraining LR / 3,
-#             3% linear warmup, cosine to 0
+#   optimizer Muon (ladder/configs/opt/muon.sh, as the pipeline SFT; SFT_OPT=adamw switches), peak LR =
+#             pretraining LR / 3, 3% linear warmup, cosine to 0
 #   batch     the pipeline steps over 32 packed 4096-token rows (~315 examples); here the global batch counts
 #             examples (online packing, dp_balanced) and defaults to stats.json's match for this DP size
 #   no validation; one checkpoint per epoch, all kept
 # Different: the sampling order inside a step and the packing (online, balanced over DP ranks).
 #
 # Required: CONFIG, LR, OUT_ROOT, SFT_DATA_DIR (TOKENIZER defaults to the family's, see common.sh)
-# Optional: OPT, HEAD / MARGIN_D / MARGIN_REVERSE / HEAD_SCALE / SFN_WEIGHT (the pretraining run's), PRETRAIN_TAG,
+# Optional: OPT (the pretraining run's optimizer, default muon: it names the run), SFT_OPT (default muon),
+#   HEAD / MARGIN_D / MARGIN_REVERSE / HEAD_SCALE / SFN_WEIGHT (the pretraining run's), PRETRAIN_TAG,
 #   PRETRAIN_RUN, SFT_TAG, SFT_LR, SFT_GBS (examples per step), SEED (default 1234), WANDB_PROJECT, VENV, EXTRA_ARGS,
 #   NNODES / NODE_RANK / MASTER_ADDR / MASTER_PORT / GPUS_PER_NODE (set by the launchers), DRY_RUN=1
 # Output: $OUT_ROOT/sft/<run>_<PRETRAIN_TAG>_sft_<SFT_TAG>/{ckpt,tb,cmd_*.sh,sft_data_stats.json}.
@@ -35,9 +36,8 @@ if [ "${DRY_RUN:-0}" != 1 ]; then source ladder/env/cuda_env.sh; fi
 
 : "${CONFIG:?set CONFIG, e.g. CONFIG=llama3_r1}" "${SFT_DATA_DIR:?set SFT_DATA_DIR (ladder/sft/prepare_sft_data.py output)}"
 source "ladder/configs/${CONFIG}.sh"
-OPT=${OPT:-adamw}
-source "ladder/configs/opt/${OPT}.sh"
-source ladder/sft/common.sh
+source ladder/sft/common.sh                   # OPT names the pretraining run; SFT_OPT is the SFT optimizer
+source "ladder/configs/opt/${SFT_OPT}.sh"
 
 NNODES=${NNODES:-1}
 NODE_RANK=${NODE_RANK:-0}
@@ -130,7 +130,7 @@ if [ "$NODE_RANK" = 0 ]; then
     echo "   from $PRETRAIN_CKPT (iteration ${PRETRAIN_ITER:-?}), LM head: ${SFT_HEAD_ARGS[*]:-plain}"
     echo "   data $DATA: $EXAMPLES examples x $EPOCHS epochs; global batch $GBS examples" \
          "(pipeline ${EX_PER_STEP} per step), $TRAIN_ITERS iterations, checkpoint every $EPOCH_ITERS"
-    echo "   LR $SFT_LR (pretraining $LR / 3), 3% warmup, cosine to 0; $NNODES x $GPUS_PER_NODE GPUs" \
+    echo "   optimizer $SFT_OPT, LR $SFT_LR (pretraining $LR / 3), 3% warmup, cosine to 0; $NNODES x $GPUS_PER_NODE GPUs" \
          "${SFT_ITER:+(resuming at $SFT_ITER)}"
 fi
 if [ "${DRY_RUN:-0}" = 1 ]; then

@@ -152,7 +152,8 @@ HEAD_VARS = ("HEAD", "MARGIN_D", "MARGIN_REVERSE", "HEAD_SCALE", "SFN_WEIGHT")
 def run_script(script, env):
     full = {k: v for k, v in os.environ.items()
             if k not in HEAD_VARS + ("GBS", "SFT_GBS", "SFT_LR", "PRETRAIN_TAG", "PRETRAIN_RUN", "ITERS",
-                                     "TARGET", "TASKS", "NUM_SAMPLES", "MAX_PROBLEMS", "NNODES", "TOKENIZER")}
+                                     "TARGET", "TASKS", "NUM_SAMPLES", "MAX_PROBLEMS", "NNODES", "TOKENIZER",
+                                     "MODEL", "EVAL_DIR", "FORCE", "OUT_ROOT", "OPT", "SFT_OPT")}
     full.update({"DRY_RUN": "1", **{k: str(v) for k, v in env.items()}})
     return subprocess.run(["bash", script], cwd=REPO, env=full, capture_output=True, text=True)
 
@@ -196,6 +197,22 @@ def test_train_sft_plan(tmp_path, sft_data, env, head, run):
         assert f in cmd
     assert flag(cmd, "--sft-tokenizer-prompt-format") == "identity"
     assert flag(cmd, "--lr-decay-style") == "cosine" and flag(cmd, "--min-lr") == "0"
+    assert flag(cmd, "--optimizer") == "muon"
+
+
+@pytest.mark.parametrize("env,opt,pre_run,suffix", [
+    ({}, "muon", "llama3_r1_muon_lr2e-3", ""),                                  # defaults: Muon run, Muon SFT
+    ({"OPT": "adamw"}, "muon", "llama3_r1_adamw_lr2e-3", ""),                   # AdamW-pretrained, still Muon SFT
+    ({"SFT_OPT": "adamw"}, "adam", "llama3_r1_muon_lr2e-3", "_adamw"),          # explicit switch, own run name
+])
+def test_train_sft_optimizer(tmp_path, sft_data, env, opt, pre_run, suffix):
+    res = run_script("ladder/sft/train_sft.sh", {"CONFIG": "llama3_r1", "LR": "2e-3", "OUT_ROOT": tmp_path,
+                                                 "SFT_DATA_DIR": sft_data, **env})
+    assert res.returncode == 0, res.stderr
+    cmd = shlex.split(res.stdout.strip().splitlines()[-1])
+    assert flag(cmd, "--optimizer") == opt
+    assert flag(cmd, "--pretrained-checkpoint") == f"{tmp_path}/runs/{pre_run}/ckpt/main"
+    assert flag(cmd, "--save") == f"{tmp_path}/sft/{pre_run}_main_sft_omi2_500k_ep10{suffix}/ckpt"
 
 
 def test_train_sft_rejects_bad_batch_and_seq(tmp_path, sft_data):
@@ -206,27 +223,59 @@ def test_train_sft_rejects_bad_batch_and_seq(tmp_path, sft_data):
     assert run_script("ladder/sft/train_sft.sh", base).returncode != 0
 
 
-def test_eval_plan(tmp_path):
+def make_sft_run(tmp_path):
     run = "llama3_r1_muon_lr2.8e-3_hfn_d0.02"
-    sft = tmp_path / "sft" / f"{run}_main_sft_omi2_500k_ep10" / "ckpt"
-    (sft / "iter_0001602").mkdir(parents=True)
-    (sft / "iter_0016025").mkdir()
-    (sft / "latest_checkpointed_iteration.txt").write_text("16025")
+    sft = tmp_path / "sft" / f"{run}_main_sft_omi2_500k_ep10"
+    (sft / "ckpt" / "iter_0001602").mkdir(parents=True)
+    (sft / "ckpt" / "iter_0016025").mkdir()
+    (sft / "ckpt" / "latest_checkpointed_iteration.txt").write_text("16025")
     pre = tmp_path / "runs" / run / "ckpt" / "main"
     pre.mkdir(parents=True)
     (pre / "latest_checkpointed_iteration.txt").write_text("35000")
+    return run, sft
+
+
+def test_export_plan(tmp_path):
+    run, sft = make_sft_run(tmp_path)
     base = {"CONFIG": "llama3_r1", "OPT": "muon", "LR": "2.8e-3", "HEAD": "hfn", "MARGIN_D": "0.02",
             "OUT_ROOT": tmp_path}
-    out = run_script("ladder/sft/eval.sh", base)
+    out = run_script("ladder/sft/export.sh", base)
     assert out.returncode == 0, out.stderr
     lines = [l for l in out.stdout.splitlines() if l.startswith("+ ")]
-    assert len(lines) == 2
+    assert len(lines) == 1                                    # latest only
     assert "HEAD=hfn MARGIN_D=0 MARGIN_REVERSE=0" in lines[0] and "ITER=16025" in lines[0]
-    assert lines[1].endswith(f"--output-dir {tmp_path}/sft/{run}_main_sft_omi2_500k_ep10/eval/iter_16025")
-    out = run_script("ladder/sft/eval.sh", {**base, "ITERS": "all", "TASKS": "gsm8k", "NUM_SAMPLES": "16"})
+    assert f"OUT={sft}/hf/iter_16025 " in lines[0]
+    (sft / "hf" / "iter_1602").mkdir(parents=True)
+    (sft / "hf" / "iter_1602" / "export_meta.json").write_text("{}")
+    out = run_script("ladder/sft/export.sh", {**base, "ITERS": "all"})
     lines = [l for l in out.stdout.splitlines() if l.startswith("+ ")]
-    assert len(lines) == 4 and "eval/iter_1602_gsm8k_n16 --tasks gsm8k --num-samples 16" in lines[1]
-    out = run_script("ladder/sft/eval.sh", {**base, "TARGET": "pretrained"})
+    assert len(lines) == 1 and "ITER=16025" in lines[0]        # iteration 1602 is already exported
+    assert out.stdout.rstrip().endswith(f"{sft}/hf/iter_16025")
+    out = run_script("ladder/sft/export.sh", {**base, "TARGET": "pretrained"})
     lines = [l for l in out.stdout.splitlines() if l.startswith("+ ")]
     assert "HEAD=hfn MARGIN_D=0.02" in lines[0] and f"OUT={tmp_path}/runs/{run}/hf/main_iter35000" in lines[0]
-    assert lines[1].endswith("eval_pretrained/iter_35000")
+
+
+def test_eval_models(tmp_path):
+    run, sft = make_sft_run(tmp_path)
+    for it in (16025, 1602, 3204):
+        (sft / "hf" / f"iter_{it}").mkdir(parents=True)
+    other = tmp_path / "models" / "Qwen3-0.6B-Base"
+    other.mkdir(parents=True)
+    out = run_script("ladder/sft/eval.sh", {"MODEL": f"{sft}/hf/iter_*"})
+    assert out.returncode == 0, out.stderr
+    lines = [l for l in out.stdout.splitlines() if l.startswith("+ ")]
+    assert [l.split("--output-dir ")[1] for l in lines] == [f"{sft}/eval/iter_{it}" for it in (1602, 3204, 16025)]
+    out = run_script("ladder/sft/eval.sh", {"MODEL": f"{other} {sft}/hf/iter_1602/", "TASKS": "gsm8k math500",
+                                            "NUM_SAMPLES": "4", "MAX_PROBLEMS": "50"})
+    lines = [l for l in out.stdout.splitlines() if l.startswith("+ ")]
+    assert lines[0].endswith(f"--output-dir {tmp_path}/models/eval/Qwen3-0.6B-Base_gsm8k_math500_n4_p50 "
+                             "--tasks gsm8k math500 --num-samples 4 --max-problems 50")
+    assert f"--model {sft}/hf/iter_1602 " in lines[1]
+    out = run_script("ladder/sft/eval.sh", {"MODEL": f"{other}", "EVAL_DIR": tmp_path / "x"})
+    assert out.stdout.splitlines()[-1].endswith(f"--output-dir {tmp_path}/x")
+    assert run_script("ladder/sft/eval.sh", {"MODEL": f"{sft}/hf/iter_*", "EVAL_DIR": "/x"}).returncode != 0
+    full = {k: v for k, v in os.environ.items() if k not in ("MODEL", "DRY_RUN")}
+    res = subprocess.run(["bash", "ladder/sft/eval.sh"], cwd=REPO, env={**full, "MODEL": "/nope"},
+                         capture_output=True, text=True)
+    assert res.returncode != 0 and "export.sh" in res.stderr
