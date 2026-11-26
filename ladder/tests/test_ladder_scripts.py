@@ -21,6 +21,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = sorted(p.stem for f in ("llama3", "qwen3") for p in (REPO / "ladder/configs").glob(f"{f}_r*.sh"))
 FAKE_ENV = {"TRAIN_DATA": "x", "VALID_DATA": "x", "TOKENIZER": "x"}
+HEAD_VARS = ("HEAD", "MARGIN_D", "MARGIN_REVERSE", "HEAD_SCALE", "SFN_WEIGHT")
 VALID_TAG = "lm loss validation"   # what Megatron's torch SummaryWriter writes, spaces included
 
 
@@ -43,12 +44,22 @@ def train_cmd(config, out_root, **env):
     """Megatron arguments train.sh would launch, as a list."""
     full = {**os.environ, **FAKE_ENV, "OUT_ROOT": str(out_root), "CONFIG": config, "DRY_RUN": "1",
             **{k: str(v) for k, v in env.items()}}
-    for k in ("MODE", "TPP", "STOP_TPP", "LR", "OPT"):
+    for k in ("MODE", "TPP", "STOP_TPP", "LR", "OPT", *HEAD_VARS):
         if k not in env:
             full.pop(k, None)
     res = subprocess.run(["bash", "ladder/train.sh"], cwd=REPO, env=full, capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
     return shlex.split(res.stdout.strip().splitlines()[-1])
+
+
+def train_run(config, out_root, **env):
+    """train.sh DRY_RUN result (stdout, stderr, return code) without asserting success."""
+    full = {**os.environ, **FAKE_ENV, "OUT_ROOT": str(out_root), "CONFIG": config, "DRY_RUN": "1",
+            **{k: str(v) for k, v in env.items()}}
+    for k in ("MODE", "TPP", "STOP_TPP", "LR", "OPT", *HEAD_VARS):
+        if k not in env:
+            full.pop(k, None)
+    return subprocess.run(["bash", "ladder/train.sh"], cwd=REPO, env=full, capture_output=True, text=True)
 
 
 def arg(cmd, flag, cast=int):
@@ -57,7 +68,7 @@ def arg(cmd, flag, cast=int):
 
 def run_sweep(**env):
     full = {**os.environ, "DRY_RUN": "1", **{k: str(v) for k, v in env.items()}}
-    for k in ("LRS", "UPTO", "QOS", "NODES", "OPT"):
+    for k in ("LRS", "UPTO", "QOS", "NODES", "OPT", *HEAD_VARS):
         if k not in env:
             full.pop(k, None)
     return subprocess.run(["bash", "ladder/sweep.sh"], cwd=REPO, env=full, capture_output=True, text=True)
@@ -120,6 +131,107 @@ def test_train_rejects_unknown_branch(tmp_path):
             "MODE": "branch", "TPP": "30"}
     res = subprocess.run(["bash", "ladder/train.sh"], cwd=REPO, env=full, capture_output=True, text=True)
     assert res.returncode != 0 and "not in BRANCH_TPPS" in res.stderr
+
+
+# ---- LM head + token margin (ladder/configs/head.sh) ----------------------------------------------
+HEAD_CASES = [
+    ({}, [], ""),
+    ({"HEAD": "nfn"}, ["--lm-head-feature-norm", "nfn", "--token-margin", "0"], "_nfn_d0"),
+    ({"HEAD": "hfn", "MARGIN_D": "0.02"},
+     ["--lm-head-feature-norm", "hfn", "--token-margin", "0.02", "--lm-head-feature-norm-scale", "60"],
+     "_hfn_d0.02"),
+    ({"HEAD": "sfn", "MARGIN_D": "0.02", "MARGIN_REVERSE": "1"},
+     ["--lm-head-feature-norm", "sfn", "--token-margin", "0.02", "--token-margin-reverse",
+      "--lm-head-feature-norm-scale", "60", "--soft-feature-norm-weight", "1e-3"],
+     "_sfn_rev_d0.02"),
+    ({"HEAD": "hfn", "HEAD_SCALE": "40"},
+     ["--lm-head-feature-norm", "hfn", "--token-margin", "0", "--lm-head-feature-norm-scale", "40"],
+     "_hfn_d0_s40"),
+    ({"HEAD": "sfn", "MARGIN_D": "0.05", "SFN_WEIGHT": "1e-2"},
+     ["--lm-head-feature-norm", "sfn", "--token-margin", "0.05", "--lm-head-feature-norm-scale", "60",
+      "--soft-feature-norm-weight", "1e-2"],
+     "_sfn_d0.05_t1e-2"),
+]
+HEAD_FLAGS = ("--lm-head-feature-norm", "--token-margin", "--token-margin-reverse",
+              "--lm-head-feature-norm-scale", "--soft-feature-norm-weight")
+
+
+def head_flags(cmd):
+    out, i = [], 0
+    while i < len(cmd):
+        if cmd[i] in HEAD_FLAGS:
+            out.append(cmd[i])
+            if cmd[i] != "--token-margin-reverse":
+                out.append(cmd[i + 1])
+                i += 1
+        i += 1
+    return out
+
+
+@pytest.mark.parametrize("env,flags,tag", HEAD_CASES)
+def test_train_head_args_and_run_name(tmp_path, env, flags, tag):
+    cmd = train_cmd("llama3_r1", tmp_path, LR="2e-3", **env)
+    assert head_flags(cmd) == flags
+    run = f"llama3_r1_adamw_lr2e-3{tag}"
+    assert arg(cmd, "--save", str) == str(tmp_path / "runs" / run / "ckpt" / "main")
+    # a branch forks from the stable run of the same head
+    br = train_cmd("llama3_r1", tmp_path, LR="2e-3", MODE="branch", TPP=20, **env)
+    assert arg(br, "--load", str) == str(tmp_path / "runs" / run / "ckpt" / "main")
+    assert head_flags(br) == flags
+    # lr_fit.py keys logs by the plan header: the head tag rides on the optimizer field
+    header = train_run("llama3_r1", tmp_path, LR="2e-3", **env).stdout.splitlines()[0]
+    assert header.startswith(f"== llama3_r1 + adamw{tag}: N_eff ")
+
+
+@pytest.mark.parametrize("env", [
+    {"MARGIN_D": "0.1"},                                   # margin on the plain head
+    {"HEAD": "hfn", "MARGIN_REVERSE": "1"},                # reverse without a margin
+    {"HEAD": "xfn"},
+    {"HEAD": "hfn", "MARGIN_D": "-1"},
+    {"HEAD": "hfn", "HEAD_SCALE": "0"},
+    {"HEAD": "sfn", "MARGIN_REVERSE": "2", "MARGIN_D": "0.1"},
+])
+def test_train_rejects_bad_head(tmp_path, env):
+    res = train_run("llama3_r1", tmp_path, **env)
+    assert res.returncode != 0 and res.stderr.strip() and "pretrain_gpt.py" not in res.stdout
+
+
+def test_head_tag_matches_scaling_parse_cmd(tmp_path):
+    scaling = load_scaling()   # parse_cmd is stdlib
+    for env, _, tag in HEAD_CASES:
+        cmd = train_cmd("llama3_r1", tmp_path, OPT="muon", **env)
+        path = tmp_path / "cmd.sh"
+        path.write_text(shlex.join(cmd))
+        assert scaling.parse_cmd(str(path))["opt"] == f"muon{tag}"
+
+
+def test_export_dry_run(tmp_path):
+    ckpt = tmp_path / "runs" / "llama3_r1_muon_lr2e-3_hfn_d0.02" / "ckpt" / "tpp50"
+    ckpt.mkdir(parents=True)
+    (ckpt / "latest_checkpointed_iteration.txt").write_text("17500")
+    env = {**os.environ, "DRY_RUN": "1", "CONFIG": "llama3_r1", "TOKENIZER": "/tok", "CKPT": str(ckpt),
+           "HEAD": "hfn", "MARGIN_D": "0.02"}
+    for k in ("ITER", "OUT", "MARGIN_REVERSE", "HEAD_SCALE", "SFN_WEIGHT"):
+        env.pop(k, None)
+    res = subprocess.run(["bash", "ladder/export/export_hf.sh"], cwd=REPO, env=env, capture_output=True,
+                         text=True)
+    assert res.returncode == 0, res.stderr
+    cmd = shlex.split(res.stdout.strip().splitlines()[-1])
+    assert head_flags(cmd)[:2] == ["--lm-head-feature-norm", "hfn"]
+    assert arg(cmd, "--load", str) == str(ckpt) and "--ckpt-step" not in cmd
+    assert arg(cmd, "--hf-export-dir", str) == str(ckpt.parent.parent / "hf" / "tpp50_iter17500")
+    assert arg(cmd, "--tensor-model-parallel-size") == 1
+
+
+def test_sweep_passes_head():
+    res = run_sweep(CONFIG="llama3_r1", LRS="2e-3", UPTO=20, OPT="muon", HEAD="hfn", MARGIN_D="0.02")
+    assert res.returncode == 0, res.stderr
+    jobs = sbatch_jobs(res.stderr)
+    assert len(jobs) == 2
+    for j in jobs:
+        assert j["export"]["HEAD"] == "hfn" and j["export"]["MARGIN_D"] == "0.02"
+        assert "_hfn_d0.02-" in j["name"]
+    assert run_sweep(CONFIG="llama3_r1", HEAD="hfn", MARGIN_REVERSE="1").returncode != 0
 
 
 # ---- sweep.sh -----------------------------------------------------------------------------------

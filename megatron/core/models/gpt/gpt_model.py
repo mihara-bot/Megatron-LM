@@ -22,6 +22,13 @@ from megatron.core.models.common.embeddings.rotary_pos_embedding import (
     RotaryEmbedding,
 )
 from megatron.core.models.common.language_module.language_module import LanguageModule
+from megatron.core.models.gpt.token_margin import (
+    REPORT_ATTR as TOKEN_MARGIN_REPORT_ATTR,
+    FeatureNormColumnParallelLinear,
+    feature_norm_head_input,
+    sampled_logit_stats,
+    token_margin_objective,
+)
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.pipeline_parallel.fine_grained_activation_offload import (
     FineGrainedActivationOffloadingInterface as off_interface,
@@ -314,7 +321,11 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
             output_layer_cls = (
                 TELMHeadColumnParallelLinear
                 if is_mxfp8_output_proj_active(config)
-                else tensor_parallel.ColumnParallelLinear
+                else (
+                    FeatureNormColumnParallelLinear
+                    if config.lm_head_feature_norm is not None
+                    else tensor_parallel.ColumnParallelLinear
+                )
             )
             self.output_layer = output_layer_cls(
                 config.hidden_size,
@@ -340,6 +351,9 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
         if self.pre_process or self.post_process or self.mtp_process:
             self.setup_embeddings_and_output_layer()
 
+        if self.config.lm_head_feature_norm is not None and self.post_process:
+            self._setup_feature_norm_head()
+
         if has_config_logger_enabled(self.config):
             log_config_to_disk(
                 self.config, self.state_dict(), prefix=f'{type(self).__name__}_init_ckpt'
@@ -348,6 +362,29 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
             if hasattr(module, 'finish_init'):
                 quant_config = get_quant_config_or_none(name, self.config.quant_recipe)
                 module.finish_init(quant_config)
+
+    def _setup_feature_norm_head(self) -> None:
+        """Prepare the SphereFace-R LM head (megatron/core/models/gpt/token_margin.py)."""
+        if self.share_embeddings_and_output_weights:
+            raise ValueError(
+                "lm_head_feature_norm needs untied embeddings: the export fold rescales the "
+                "output rows, which would also rescale a tied input embedding."
+            )
+        if not isinstance(self.output_layer, FeatureNormColumnParallelLinear):
+            # e.g. the MXFP8 Transformer Engine LM head
+            raise ValueError(
+                "lm_head_feature_norm needs the FeatureNormColumnParallelLinear output layer, "
+                f"got {type(self.output_layer).__name__}."
+            )
+        if self.config.lm_head_feature_norm == "hfn":
+            # Freeze the final RMSNorm weight at 1 so ||h|| = sqrt(D) and the hfn head folds into
+            # a plain output layer (s / sqrt(D)) W_i / ||W_i|| on export.
+            final_norm = getattr(self.decoder, "final_layernorm", None)
+            if final_norm is None:
+                raise ValueError("lm_head_feature_norm=hfn needs the decoder's final layernorm.")
+            for param in final_norm.parameters():
+                param.requires_grad_(False)
+        setattr(self, TOKEN_MARGIN_REPORT_ATTR, None)
 
     def set_input_tensor(self, input_tensor: Tensor) -> None:
         """Sets input tensor to the model.
@@ -833,6 +870,8 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
         sequence_parallel_override = False
 
         if output_processor is not None:
+            if self.config.lm_head_feature_norm is not None:
+                raise NotImplementedError("output_processor does not apply lm_head_feature_norm.")
             return output_processor(
                 hidden_states=hidden_states,
                 output_layer=self.output_layer,
@@ -874,6 +913,17 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
                 # then back to [S’, B, H] for the output layer.
                 reshaped = hidden_states.squeeze(1).unsqueeze(0)
                 hidden_states = inference_context.last_token_logits(reshaped).unsqueeze(1)
+
+        # SphereFace-R head (token_margin.py): hfn rescales h to norm s here; the output layer
+        # (FeatureNormColumnParallelLinear) normalizes its rows. Per token and per row, so it
+        # holds for training, evaluation, inference and export alike.
+        feature_norm = None
+        if self.config.lm_head_feature_norm is not None:
+            hidden_states, feature_norm = feature_norm_head_input(
+                hidden_states,
+                self.config.lm_head_feature_norm,
+                self.config.lm_head_feature_norm_scale,
+            )
 
         # Inference consumes logits in fp32: emit them so when the head can, upcast otherwise.
         emit_fp32 = in_inference_mode and self.lm_head_can_emit_fp32
@@ -935,8 +985,35 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
             # [s b h] => [b s h]
             return logits.transpose(0, 1).contiguous()
 
+        if feature_norm is not None and self.training:
+            return self._token_margin_loss(labels, logits, feature_norm, loss_mask)
+
         loss = self.compute_language_model_loss(labels, logits)
 
+        return loss
+
+    def _token_margin_loss(
+        self, labels: Tensor, logits: Tensor, feature_norm: Tensor, loss_mask: Optional[Tensor]
+    ) -> Tensor:
+        """Per-token training loss [b, s] of the feature-norm head with the token margin.
+
+        Leaves the metrics of this microbatch for the loss function
+        (token_margin.pop_token_margin_report).
+        """
+        # Before the cross entropy, which consumes the logits in place.
+        logit_stats = sampled_logit_stats(logits, self.tp_group)
+        ce = self.compute_language_model_loss(labels, logits)
+        if self.output_layer.sequence_parallel:
+            # ||h|| is [s/tp, b] here, the loss [s, b] on every TP rank. The margin is computed
+            # identically on all TP ranks, so the gather's backward splits instead of reducing.
+            feature_norm = gather_from_sequence_parallel_region(
+                feature_norm, tensor_parallel_output_grad=False, group=self.tp_group
+            )
+        loss, report = token_margin_objective(
+            ce, feature_norm.transpose(0, 1), loss_mask, self.config
+        )
+        report.update(logit_stats)
+        setattr(self, TOKEN_MARGIN_REPORT_ATTR, report)
         return loss
 
     def build_schedule_plan(

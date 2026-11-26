@@ -25,6 +25,7 @@ from megatron.core import mpu
 from megatron.core.datasets.data_schedule import get_batch_on_this_rank_for_sequence_packing
 from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
+from megatron.core.models.gpt.token_margin import pop_token_margin_report
 from megatron.core.package_info import __version__ as mcore_version
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.parallel_state import get_context_parallel_group
@@ -284,6 +285,10 @@ def loss_func(
 
         num_tokens = loss_mask.sum().clone().detach().to(torch.int)
         report = {'lm loss': torch.cat([loss.clone().detach().view(1), num_tokens.view(1)])}
+        # SphereFace-R head in training: 'lm loss' is the margin objective; add 'ce loss' (plain
+        # cross entropy) and the margin metrics, as [sum, count] like 'lm loss'.
+        if model is not None:
+            report.update(pop_token_margin_report(model))
 
     # Check individual rank losses are not NaN prior to DP all-reduce.
     rerun_state_machine = get_rerun_state_machine()

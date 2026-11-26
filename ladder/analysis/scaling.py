@@ -64,6 +64,19 @@ def parse_cmd(path):
     a["groups"] = val("--num-query-groups", int, a["heads"]) if "--group-query-attention" in toks else a["heads"]
     a["kv_channels"] = val("--kv-channels", int, a["hidden"] // a["heads"])
     a["qk_norm"] = "--qk-layernorm" in toks
+    # LM head + token margin (ladder/configs/head.sh): append its run-name tag to the optimizer, so
+    # margin runs group apart from the plain-head runs of the same config and LR.
+    mode = val("--lm-head-feature-norm", str)
+    if mode is not None:
+        tag = f"_{mode}" + ("_rev" if "--token-margin-reverse" in toks else "")
+        tag += f"_d{val('--token-margin', str, '0')}"
+        scale = val("--lm-head-feature-norm-scale", str)
+        if mode != "nfn" and scale not in (None, "60"):
+            tag += f"_s{scale}"
+        weight = val("--soft-feature-norm-weight", str)
+        if mode == "sfn" and weight not in (None, "1e-3"):
+            tag += f"_t{weight}"
+        a["opt"] += tag
     if "--num-experts" in toks:
         raise ValueError("MoE runs are not supported by model_numbers()")
     return a

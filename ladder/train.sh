@@ -24,7 +24,9 @@
 #   TPP           branch target (MODE=branch), one of the config's BRANCH_TPPS
 #   STOP_TPP      stable run only: stop at S(STOP_TPP) instead of finishing (LR sweeps stop at 100;
 #                 rerunning later without STOP_TPP continues the same run to TPP_MAX)
-#   LR, MBS, SEED, RUN (run directory name, default <CONFIG>_<OPT>_lr<LR>), WANDB_PROJECT, VENV
+#   HEAD, MARGIN_D, MARGIN_REVERSE, HEAD_SCALE, SFN_WEIGHT
+#                 LM head + token margin, see ladder/configs/head.sh (default: plain head)
+#   LR, MBS, SEED, RUN (run directory name, default <CONFIG>_<OPT>_lr<LR><HEAD_TAG>), WANDB_PROJECT, VENV
 #   NNODES, NODE_RANK, MASTER_ADDR, MASTER_PORT, GPUS_PER_NODE   (set by the launchers)
 #   DRY_RUN=1     print the plan and the command, launch nothing
 #   SKIP_TOKENIZER_CHECK=1   skip ladder/data/check_tokenizer.py (tokenizer vs config vs data)
@@ -41,11 +43,12 @@ source ladder/env/cuda_env.sh
 source "ladder/configs/${CONFIG}.sh"
 OPT=${OPT:-adamw}
 source "ladder/configs/opt/${OPT}.sh"
+source ladder/configs/head.sh
 : "${TRAIN_DATA:?}" "${VALID_DATA:?}" "${TOKENIZER:?}" "${OUT_ROOT:?}"
 
 MODE=${MODE:-stable}
 SEED=${SEED:-1234}
-RUN=${RUN:-${CONFIG}_${OPT}_lr${LR}}
+RUN=${RUN:-${CONFIG}_${OPT}_lr${LR}${HEAD_TAG}}
 RUN_DIR=$OUT_ROOT/runs/$RUN
 
 NNODES=${NNODES:-1}
@@ -84,7 +87,10 @@ if [ "$RETAIN" -eq 0 ]; then RETAIN=$SAVE_INTERVAL; fi
 MAIN_CKPT=$RUN_DIR/ckpt/main
 
 print_plan() {
-    echo "== $CONFIG + $OPT: N_eff $N_EFF, $TOK_PER_ITER tokens/iter, warmup $WARMUP_ITERS, LR $LR"
+    # ladder/analysis/lr_fit.py keys runs by this header: the head tag keeps margin runs apart from the
+    # plain-head run with the same LR (empty for the plain head, so existing logs parse as before).
+    echo "== $CONFIG + $OPT${HEAD_TAG}: N_eff $N_EFF, $TOK_PER_ITER tokens/iter, warmup $WARMUP_ITERS, LR $LR"
+    echo "   LM head: ${HEAD_ARGS[*]:-plain}"
     echo "   save every $SAVE_INTERVAL (stable run keeps multiples of $RETAIN), validate every $EVAL_INTERVAL, branch ends on multiples of $Q"
     printf "   %-8s %10s %10s %12s %8s\n" target decay_from end tokens TPP
     for t in $BRANCH_TPPS $TPP_MAX; do
@@ -201,7 +207,7 @@ SYSTEM_ARGS=(
 )
 
 read -r -a EXTRA <<< "${EXTRA_ARGS:-}"
-ARGS=("${MODEL_ARGS[@]}" "${OPT_ARGS[@]}" "${SCHED_ARGS[@]}" "${DATA_ARGS[@]}" "${EVAL_ARGS[@]}"
+ARGS=("${MODEL_ARGS[@]}" ${HEAD_ARGS[@]+"${HEAD_ARGS[@]}"} "${OPT_ARGS[@]}" "${SCHED_ARGS[@]}" "${DATA_ARGS[@]}" "${EVAL_ARGS[@]}"
       "${LOG_ARGS[@]}" "${SYSTEM_ARGS[@]}" "${LOAD_ARGS[@]}" "${SAVE_ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"})
 
 if [ "$NODE_RANK" = 0 ]; then

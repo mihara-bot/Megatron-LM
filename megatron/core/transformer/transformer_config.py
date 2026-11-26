@@ -72,6 +72,29 @@ class TransformerConfig(ModelParallelConfig):
     num_layers: int = field(default=0, metadata={"argparse_meta": {"default": None}})
     """Number of transformer layers in a transformer block."""
 
+    lm_head_feature_norm: Optional[Literal['nfn', 'hfn', 'sfn']] = None
+    """SphereFace-R LM head (arXiv 2109.05565; megatron/core/models/gpt/token_margin.py).
+    The output-layer rows are rescaled to unit norm in the forward pass, so every logit is a
+    feature norm times cos(h, W_i), h being the output-layer input. 'nfn' uses ||h||. 'hfn'
+    rescales h to norm lm_head_feature_norm_scale and freezes the final RMSNorm weight at 1, so
+    the head folds into a plain output layer on export. 'sfn' uses ||h|| and adds
+    soft_feature_norm_weight * (||h|| - lm_head_feature_norm_scale)^2 per token to the training
+    loss. None keeps the plain output layer. Dense GPTModel with untied embeddings only."""
+
+    lm_head_feature_norm_scale: float = 60.0
+    """s: the feature norm of the 'hfn' head and the target of the 'sfn' penalty."""
+
+    soft_feature_norm_weight: float = 1.0e-3
+    """t: weight of the per-token 'sfn' penalty t (||h|| - s)^2."""
+
+    token_margin: float = 0.0
+    """Additive cosine margin d >= 0 on the target token (psi = cos - d), training loss only.
+    Needs lm_head_feature_norm. The logit margin is d * s for 'hfn' and d * ||h|| for 'nfn' and
+    'sfn' (the gradient flows through ||h||). Validation reports the plain cross entropy."""
+
+    token_margin_reverse: bool = False
+    """Use cos + d instead of cos - d on the target token (margin_reverse); needs token_margin > 0."""
+
     mtp_num_layers: Optional[int] = None
     """Number of Multi-Token Prediction (MTP) Layers.
     MTP extends the prediction scope to multiple future tokens at each position.
@@ -1900,6 +1923,48 @@ class TransformerConfig(ModelParallelConfig):
                 f"tensor-parallel size, got {self.tensor_model_parallel_size}."
             )
 
+    def _validate_lm_head_feature_norm(self) -> None:
+        """Validate the SphereFace-R LM head and token-margin settings."""
+        mode = self.lm_head_feature_norm
+        d = self.token_margin
+        if not math.isfinite(d) or d < 0:
+            raise ValueError(
+                f"token_margin must be finite and >= 0, got {d}; "
+                "use token_margin_reverse for cos + d."
+            )
+        if mode is None:
+            if d != 0 or self.token_margin_reverse:
+                raise ValueError("token_margin and token_margin_reverse need lm_head_feature_norm.")
+            return
+        if mode not in ('nfn', 'hfn', 'sfn'):
+            raise ValueError(f"lm_head_feature_norm must be nfn, hfn or sfn, got {mode!r}.")
+        if self.token_margin_reverse and d == 0:
+            raise ValueError("token_margin_reverse needs token_margin > 0.")
+        s = self.lm_head_feature_norm_scale
+        if not math.isfinite(s) or s <= 0:
+            raise ValueError(f"lm_head_feature_norm_scale must be finite and > 0, got {s}.")
+        t = self.soft_feature_norm_weight
+        if not math.isfinite(t) or t < 0:
+            raise ValueError(f"soft_feature_norm_weight must be finite and >= 0, got {t}.")
+        # The MTP heads reuse the output layer outside the feature-norm path.
+        if self.mtp_num_layers:
+            raise ValueError("lm_head_feature_norm does not support MTP (mtp_num_layers).")
+        # Deferred embedding wgrad writes into output_layer.weight.main_grad, which the
+        # normalized copy of the weight does not have.
+        if self.defer_embedding_wgrad_compute:
+            raise ValueError("lm_head_feature_norm does not support defer_embedding_wgrad_compute.")
+        # A full-iteration graph would replay the loss without refreshing the metrics report.
+        if self.cuda_graph_impl == "full_iteration":
+            raise ValueError("lm_head_feature_norm does not support cuda_graph_impl=full_iteration.")
+        if mode == 'hfn' and (
+            self.normalization != 'RMSNorm' or self.layernorm_zero_centered_gamma
+        ):
+            # hfn freezes the final norm weight at 1; the export fold needs h = x / rms(x).
+            raise ValueError(
+                "lm_head_feature_norm=hfn needs normalization=RMSNorm without "
+                "layernorm_zero_centered_gamma (apply_layernorm_1p)."
+            )
+
     def __post_init__(self):
         """Python dataclass method that is used to modify attributes after initialization.
         See https://docs.python.org/3/library/dataclasses.html#post-init-processing for more
@@ -1907,6 +1972,7 @@ class TransformerConfig(ModelParallelConfig):
         """
         super().__post_init__()
         self._validate_cp_layouts()
+        self._validate_lm_head_feature_norm()
 
         for name in ("mtp_ce_loss_weight", "mtp_kl_loss_weight"):
             value = getattr(self, name)

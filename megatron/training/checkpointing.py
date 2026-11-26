@@ -391,6 +391,38 @@ def check_checkpoint_args(
         _compare('pipeline_model_parallel_size', config_section='model.transformer')
 
 
+def check_lm_head_feature_norm_args(checkpoint_args):
+    """Refuse loads that change the LM-head geometry, which decides what the head weights mean.
+
+    A SphereFace-R head (megatron/core/models/gpt/token_margin.py) normalizes the output rows
+    (and, for hfn, the input) in the forward pass, so its raw weights give wrong logits in a
+    plain head and the reverse. Checked for finetune loads too (check_checkpoint_args is not):
+    SFT starts from a pretraining checkpoint with --finetune. nfn and sfn share a geometry, so an
+    sfn checkpoint can be fine-tuned with nfn; the training-only margin settings may differ.
+    """
+    from megatron.core.models.gpt.token_margin import head_geometry
+
+    args = get_args()
+    saved = head_geometry(
+        getattr(checkpoint_args, 'lm_head_feature_norm', None),
+        getattr(checkpoint_args, 'lm_head_feature_norm_scale', None),
+    )
+    current = head_geometry(
+        getattr(args, 'lm_head_feature_norm', None),
+        getattr(args, 'lm_head_feature_norm_scale', None),
+    )
+    if saved != current:
+        raise RuntimeError(
+            f"The checkpoint's LM head (lm_head_feature_norm="
+            f"{getattr(checkpoint_args, 'lm_head_feature_norm', None)}, scale="
+            f"{getattr(checkpoint_args, 'lm_head_feature_norm_scale', None)}) differs from this "
+            f"run's (lm_head_feature_norm={getattr(args, 'lm_head_feature_norm', None)}, scale="
+            f"{getattr(args, 'lm_head_feature_norm_scale', None)}): the output weights would be "
+            "read with the wrong head. Pass the checkpoint's --lm-head-feature-norm and "
+            "--lm-head-feature-norm-scale (nfn and sfn are interchangeable)."
+        )
+
+
 def ensure_directory_exists(filename, check_parent=True):
     """Build filename's path if it does not already exists."""
     dirname = os.path.dirname(filename) if check_parent else filename
@@ -2671,6 +2703,16 @@ def load_args_from_checkpoint(args, load_arg='load', checkpointing_context=None)
     for arg_name, default in _WIDE_RESIDUAL_ARG_DEFAULTS:
         _set_arg(arg_name, force=default is not None)
 
+    # SphereFace-R LM head: its geometry decides what the output weights mean, so follow the
+    # checkpoint unless the head is given on the command line (load_checkpoint checks it).
+    # The training-only margin settings (token_margin, ...) are not restored.
+    if (
+        getattr(args, 'lm_head_feature_norm', None) is None
+        and getattr(checkpoint_args, 'lm_head_feature_norm', None) is not None
+    ):
+        _set_arg('lm_head_feature_norm')
+        _set_arg('lm_head_feature_norm_scale', force=True)
+
     # Legacy MTP pattern for old checkpoints
     _set_arg('mtp_hybrid_override_pattern', force=True)
     _set_arg('mtp_num_layers', force=True)
@@ -3547,6 +3589,8 @@ def load_checkpoint(
             check_training_state=restore_training_state,
             ckpt_format=load_format,
         )
+    if 'args' in state_dict:
+        check_lm_head_feature_norm_args(state_dict['args'])
 
     current_train_state = get_train_state()
     if restore_training_state and current_train_state is not None:

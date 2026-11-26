@@ -12,6 +12,8 @@
 #   CONFIG   ladder/configs/<CONFIG>.sh (reads NODES, LR_GRID, TPP_MAX, BRANCH_TPPS)
 #   LRS      LRs to run (default: the config's LR_GRID)
 #   OPT      adamw (default) | muon
+#   HEAD, MARGIN_D, MARGIN_REVERSE, HEAD_SCALE, SFN_WEIGHT
+#            LM head + token margin (ladder/configs/head.sh), passed to every job and added to its name
 #   UPTO     last TPP to train (default TPP_MAX). Below TPP_MAX the stable job stops at the decay start of
 #            UPTO, and only the branches up to UPTO are submitted. Rerunning with a larger UPTO continues
 #            the same stable run (same run directory, same data order) and adds the missing branches.
@@ -36,6 +38,7 @@ read -r C_NODES C_TPP_MAX C_BRANCHES C_GRID < <(
 NODES=${NODES:-$C_NODES}
 LRS=${LRS:-${C_GRID//,/ }}
 OPT=${OPT:-adamw}
+source ladder/configs/head.sh   # validates the head settings and sets HEAD_TAG
 UPTO=${UPTO:-$C_TPP_MAX}
 STABLE_TIME=${STABLE_TIME:-72:00:00}
 BRANCH_TIME=${BRANCH_TIME:-24:00:00}
@@ -67,15 +70,16 @@ submit() {   # submit <time> <job name> <dependency or ""> VAR=value ...
     fi
 }
 
-echo "== $CONFIG + $OPT: LRs [$LRS] up to TPP $UPTO (TPP_MAX $C_TPP_MAX), branches [${BRANCHES[*]-}], $NODES node(s) per job"
+echo "== $CONFIG + $OPT${HEAD_TAG}: LRs [$LRS] up to TPP $UPTO (TPP_MAX $C_TPP_MAX), branches [${BRANCHES[*]-}], $NODES node(s) per job"
 for lr in $LRS; do
-    common=(CONFIG="$CONFIG" OPT="$OPT" LR="$lr")
+    common=(CONFIG="$CONFIG" OPT="$OPT" LR="$lr" HEAD="$HEAD" MARGIN_D="$MARGIN_D"
+            MARGIN_REVERSE="$MARGIN_REVERSE" HEAD_SCALE="$HEAD_SCALE" SFN_WEIGHT="$SFN_WEIGHT")
     stop=()
     if [ "$UPTO" != "$C_TPP_MAX" ]; then stop=(STOP_TPP="$UPTO"); fi
-    jid=$(submit "$STABLE_TIME" "${CONFIG}-${OPT}-lr${lr}-main" "" "${common[@]}" MODE=stable ${stop[@]+"${stop[@]}"})
+    jid=$(submit "$STABLE_TIME" "${CONFIG}-${OPT}-lr${lr}${HEAD_TAG}-main" "" "${common[@]}" MODE=stable ${stop[@]+"${stop[@]}"})
     echo "   lr $lr: stable job $jid"
     for t in ${BRANCHES[@]+"${BRANCHES[@]}"}; do
-        bid=$(submit "$BRANCH_TIME" "${CONFIG}-${OPT}-lr${lr}-tpp${t}" "$jid" "${common[@]}" MODE=branch TPP="$t")
+        bid=$(submit "$BRANCH_TIME" "${CONFIG}-${OPT}-lr${lr}${HEAD_TAG}-tpp${t}" "$jid" "${common[@]}" MODE=branch TPP="$t")
         echo "            TPP$t branch job $bid (after $jid)"
     done
 done
