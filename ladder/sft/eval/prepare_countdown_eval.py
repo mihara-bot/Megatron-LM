@@ -1,4 +1,4 @@
-# Copied from pretrain_LLM_pipeline src/cli/prepare_countdown_eval.py (commit 1aa819b6); run as a script:
+# Derived from pretrain_LLM_pipeline src/cli/prepare_countdown_eval.py (commit 1aa819b6); self-contained. Run as a script:
 #   python ladder/sft/eval/prepare_countdown_eval.py --input <dir> --output <jsonl>
 """Cut the Countdown eval set from Jiayi-Pan/Countdown-Tasks-3to4 the way TinyZero does.
 

@@ -19,9 +19,9 @@ python ladder/sft/eval/prepare_countdown_eval.py --input $DATA/Countdown-Tasks-3
 
 # extract 500k for training and 2k for validation
 
-python -m src.cli.prepare_sft_subset --input $DATA/OpenMathInstruct-2/data --file_glob 'train-*' \
-  --output_dir $DATA/sft/openmathinstruct2_500k --num_train 500000 --num_validation 2000 --seed 42 \
-  --columns problem generated_solution expected_answer problem_source --disjoint_column problem
+python ladder/sft/make_sft_subset.py --input $DATA/OpenMathInstruct-2/data --file-glob 'train-*' \
+  --output-dir $DATA/sft/openmathinstruct2_500k --num-train 500000 --num-validation 2000 --seed 42 \
+  --columns problem generated_solution expected_answer problem_source --disjoint-column problem
 
 
 # process into Megatron format

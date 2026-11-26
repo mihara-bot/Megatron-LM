@@ -10,7 +10,7 @@
 #
 # The pretraining run: the variables of ladder/sft/train_sft.sh (it must exist; any head).
 # Optional:
-#   SUBSET       the pipeline's SFT subset train split (default $DATA_ROOT/sft/openmathinstruct2_500k/train)
+#   SUBSET       make_sft_subset.py train split (default $DATA_ROOT/sft/openmathinstruct2_500k/train)
 #   SMOKE_ROWS   rows used (default 4000), 2 epochs, global batch SFT_GBS (default 64): ~125 steps
 #   VLLM_PYTHON  vLLM environment; without it the eval step is skipped
 #   DATA_ROOT, OUT_ROOT, TOKENIZER, GPUS_PER_NODE

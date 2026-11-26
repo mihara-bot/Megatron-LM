@@ -1,10 +1,12 @@
-"""CPU tests for the ladder SFT tooling: data preparation, the launchers' plans, the vLLM eval's grading path.
+"""CPU tests for the ladder SFT tooling: subset draw, data preparation, the launchers' plans, the vLLM eval's grading.
 
     python -m pytest ladder/tests/test_sft_scripts.py -p no:cacheprovider -o addopts=""
 
-No GPU, Megatron, vLLM or tokenizer needed. Checks against pretrain_LLM_pipeline run when that repository sits
-next to this one (../pretrain_LLM_pipeline) and is importable; they are skipped otherwise.
+No GPU, Megatron, vLLM or tokenizer needed. The design follows pretrain_LLM_pipeline's SFT; where the two must agree
+(subset draw, prompt template, epoch order, packing), the expected values below were computed once with that
+repository and are frozen here, so these tests do not need it.
 """
+import hashlib
 import json
 import os
 import shlex
@@ -15,42 +17,95 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-PIPELINE = REPO.parent / "pretrain_LLM_pipeline"
 sys.path.insert(0, str(REPO / "ladder" / "sft"))
 sys.path.insert(0, str(REPO / "ladder" / "sft" / "eval"))
 
 import eval_vllm  # noqa: E402
+import make_sft_subset as subset  # noqa: E402
 import prepare_sft_data as prep  # noqa: E402
 
 
-def pipeline_sft():
-    if not (PIPELINE / "src" / "data" / "sft.py").exists():
-        pytest.skip("pretrain_LLM_pipeline is not next to this repository")
-    sys.path.insert(0, str(PIPELINE))
-    from src.data import sft
-    return sft
+def digest(x):
+    return hashlib.sha256(json.dumps(x).encode()).hexdigest()[:16]
+
+
+# ---- make_sft_subset.py ----------------------------------------------------------------------------
+def write_subset_source(root):
+    """140 rows matched by 'train-*' in three JSONL files (one in a subdirectory, blank lines in between), plus one
+    file the glob leaves out; 50 distinct problems, so validation problems recur among the candidates."""
+    rows = [{"problem": f"p{(i * 7) % 50}", "generated_solution": f"s{i}", "expected_answer": str(i % 9),
+             "problem_source": "x"} for i in range(150)]
+    parts = {"train-00000.jsonl": rows[:50], "sub/train-00001.jsonl": rows[50:110],
+             "train-00002.jsonl": rows[110:140], "test-00000.jsonl": rows[140:]}
+    for name, part in parts.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(r) + "\n" + ("\n" if j % 7 == 0 else "") for j, r in enumerate(part)))
+
+
+# The pipeline's draw (src/cli/prepare_sft_subset.py) on write_subset_source with the arguments of the test below.
+SUBSET_TRAIN = [0, 3, 5, 7, 8, 11, 12, 13, 19, 20, 23, 25, 27, 29, 33, 43, 44, 45, 48, 53, 54, 55, 58, 64, 69, 71,
+                77, 83, 89, 91, 103, 104, 109, 111, 112, 118, 124, 134, 135, 139]
+SUBSET_VALIDATION = [6, 22, 26, 28, 35, 57, 62, 70]
+
+
+def test_subset_draw(tmp_path):
+    write_subset_source(tmp_path / "src")
+    out = tmp_path / "out"
+    manifest = subset.main(["--input", str(tmp_path / "src"), "--file-glob", "train-*", "--output-dir", str(out),
+                            "--num-train", "40", "--num-validation", "8", "--seed", "42", "--train-oversample", "0.5",
+                            "--columns", "problem", "generated_solution", "--disjoint-column", "problem"])
+    train = [json.loads(l) for l in (out / "train" / "train.jsonl").read_text().splitlines()]
+    validation = [json.loads(l) for l in (out / "validation" / "validation.jsonl").read_text().splitlines()]
+    assert [r["sample_id"] for r in train] == SUBSET_TRAIN
+    assert [r["sample_id"] for r in validation] == SUBSET_VALIDATION
+    assert train[0] == {"sample_id": 0, "problem": "p0", "generated_solution": "s0"}
+    assert not {r["problem"] for r in train} & {r["problem"] for r in validation}
+    # files in sorted order, the subdirectory last; the test file is not matched; blank lines are not rows
+    assert [(Path(f["path"]).relative_to(tmp_path / "src").as_posix(), f["global_start"], f["rows"])
+            for f in manifest["files"]] == [("train-00000.jsonl", 0, 50), ("train-00002.jsonl", 50, 30),
+                                            ("sub/train-00001.jsonl", 80, 60)]
+    assert manifest["train_candidates_skipped_for_overlap"] == 3 and manifest["validation_unique_values"] == 7
+    assert manifest["counts"] == {"train": 40, "validation": 8}
+
+
+def test_subset_split_rules():
+    draws = subset.draw_indices(100, 10, 3, seed=1, extra=5)
+    assert len(draws) == 18 and len(set(draws)) == 18 and draws == subset.draw_indices(100, 10, 3, 1, 5)
+    train, validation, skipped = subset.split_draws(draws, 10, 3)
+    assert validation == sorted(draws[:3]) and train == sorted(draws[3:13]) and skipped == 0
+    key = lambda i: i % 4                                 # noqa: E731
+    train, validation, skipped = subset.split_draws(draws, 3, 3, key)
+    assert not {key(i) for i in train} & {key(i) for i in validation}
+    with pytest.raises(ValueError, match="raise --train-oversample"):
+        subset.split_draws(draws, 10, 3, lambda i: 0)
+    with pytest.raises(ValueError, match="requested 101"):
+        subset.draw_indices(100, 100, 1, 1, 0)
 
 
 # ---- prepare_sft_data.py ---------------------------------------------------------------------------
 def test_matches_pipeline_functions():
-    sft = pipeline_sft()
     row = {"problem": "What is {x}? Use \\boxed{} and {{braces}}.", "generated_solution": "It is 3."}
-    assert prep.render_template(prep.PROMPT_TEMPLATE, row) == sft.render_template(prep.PROMPT_TEMPLATE, row)
-    for epoch in range(3):
-        assert prep.epoch_order(1000, 42, epoch) == sft.epoch_order(1000, 42, epoch)
+    assert prep.render_template(prep.PROMPT_TEMPLATE, row) == (
+        "Solve the following math problem. Make sure to put the answer (and only answer) inside \\boxed{}.\n\n"
+        "Problem:\nWhat is {x}? Use \\boxed{} and {{braces}}.\n\nSolution:\n")
+    assert prep.render_template("{problem}|{{lit}}|{missing_brace|{generated_solution}", row) == (
+        "What is {x}? Use \\boxed{} and {{braces}}.|{lit}|{missing_brace|It is 3.")
+    for epoch, head, h in [(0, [970, 272, 297, 321, 497, 66], "3e651b2021aaffea"),
+                           (1, [245, 373, 10, 415, 358, 808], "3797e4f0c0405925"),
+                           (2, [249, 544, 178, 209, 280, 83], "d498bffd28b9dd98")]:
+        order = prep.epoch_order(1000, 42, epoch)
+        assert order[:6] == head and digest(order) == h
     lengths = [((i * 37) % 900) + 1 for i in range(500)]
-    order = prep.epoch_order(500, 42, 0)
-    assert prep.pack_next_fit(lengths, order, 4096) == sft.pack_next_fit(lengths, order, 4096)
+    packs = prep.pack_next_fit(lengths, prep.epoch_order(500, 42, 0), 4096)
+    assert len(packs) == 59 and list(packs[0]) == [277, 189, 371, 239, 354, 480, 451, 197]
+    assert digest([list(p) for p in packs]) == "45000e04ca233ed3"
 
 
-def test_prompt_template_matches_pipeline_config():
-    yaml = pytest.importorskip("yaml")
-    cfg = PIPELINE / "configs" / "data" / "sft" / "openmathinstruct2_500k.yaml"
-    if not cfg.exists():
-        pytest.skip("pretrain_LLM_pipeline is not next to this repository")
-    sft_cfg = yaml.safe_load(cfg.read_text())["sft"]
-    assert sft_cfg["prompt_template"] == prep.PROMPT_TEMPLATE
-    assert sft_cfg["response_template"] == prep.RESPONSE_TEMPLATE
+def test_prompt_template_frozen():
+    assert prep.PROMPT_TEMPLATE == ("Solve the following math problem. Make sure to put the answer (and only answer) "
+                                    "inside \\boxed{}.\n\nProblem:\n{problem}\n\nSolution:\n")
+    assert prep.RESPONSE_TEMPLATE == "{generated_solution}"
 
 
 def char_tokenize(texts):

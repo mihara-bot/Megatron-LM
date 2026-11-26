@@ -1,5 +1,5 @@
-# Copied unchanged from pretrain_LLM_pipeline src/eval/math_grader.py (commit 1aa819b6), so pass@k here is graded
-# exactly as the pipeline grades it. Keep the two in sync.
+# Derived from pretrain_LLM_pipeline src/eval/math_grader.py (commit 1aa819b6): the same grading, so pass@k is
+# comparable across the two code bases. Self-contained; this copy is the ladder's own.
 """Answer extraction and grading for GSM8K and MATH, plus the unbiased pass@k estimator.
 
 MATH follows the Minerva protocol (Lewkowycz et al. 2022, Appendix D; the version in lm-eval's

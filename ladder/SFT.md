@@ -20,14 +20,15 @@ python ladder/sft/eval/prepare_countdown_eval.py --input $DATA/Countdown-Tasks-3
     --output $DATA/countdown/test_tinyzero_1024.jsonl              # TinyZero test rows 327680..328703
 ```
 
-The 500k / 2k subset is the pipeline's own (`src.cli.prepare_sft_subset`; same seed and source files give the same
-rows). Copy it from the cloud cluster (`/mnt/users/zhuangxinlin/data/sft/openmathinstruct2_500k`) or rebuild it
-from a pretrain_LLM_pipeline checkout:
+The 500k train / 2k validation subset (Megatron environment, CPU): a seeded draw without replacement over all rows,
+validation problems kept out of training. It is the same draw as pretrain_LLM_pipeline's SFT subset, so the same
+source files and seed give the same rows there (frozen in ladder/tests/test_sft_scripts.py); nothing here needs that
+repository.
 
 ```bash
-python -m src.cli.prepare_sft_subset --input $DATA/OpenMathInstruct-2/data --file_glob 'train-*' \
-    --output_dir $DATA/sft/openmathinstruct2_500k --num_train 500000 --num_validation 2000 --seed 42 \
-    --columns problem generated_solution expected_answer problem_source --disjoint_column problem
+python ladder/sft/make_sft_subset.py --input $DATA/OpenMathInstruct-2/data --file-glob 'train-*' \
+    --output-dir $DATA/sft/openmathinstruct2_500k --num-train 500000 --num-validation 2000 --seed 42 \
+    --columns problem generated_solution expected_answer problem_source --disjoint-column problem
 ```
 
 Then, per tokenizer family (Megatron environment, CPU is enough):
@@ -109,7 +110,7 @@ pyyaml; sympy + antlr4-python3-runtime for the MATH equivalence check).
 ## Tests
 
 - `python -m pytest ladder/tests/test_sft_scripts.py -p no:cacheprovider -o addopts=""` (CPU, no dependencies):
-  data preparation against the pipeline's functions (when ../pretrain_LLM_pipeline exists), boundary / overlong
+  subset draw, template / epoch order / packing against values frozen from the pipeline, boundary / overlong
   drops, schedule, eval problems / grading / summary, the train / export / eval launchers' plans.
 - `python -m pytest ladder/tests/test_sft_megatron_data.py -p no:cacheprovider -o addopts=""` (CPU, Megatron env with
   the ladder tokenizers): prepare_sft_data.py end to end on synthetic rows, then Megatron's VarlenDataset + identity

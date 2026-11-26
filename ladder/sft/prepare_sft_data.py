@@ -1,4 +1,4 @@
-"""Turn the pipeline's OpenMathInstruct-2 SFT subset into the Megatron --use-varlen-dataset input.
+"""Turn an OpenMathInstruct-2 SFT subset (make_sft_subset.py) into the Megatron --use-varlen-dataset input.
 
 Reproduces pretrain_LLM_pipeline's SFT data (src/data/sft.py, configs/data/sft/openmathinstruct2_*.yaml)
 for ladder/sft/train_sft.sh:
@@ -286,7 +286,7 @@ def write_parquet(path: str, rows: Sequence[Mapping[str, Any]], prompts: Sequenc
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--input", required=True, help="pipeline SFT subset train split (file or directory)")
+    parser.add_argument("--input", required=True, help="make_sft_subset.py train split (file or directory)")
     parser.add_argument("--tokenizer", required=True, help="HF tokenizer directory (the pretraining one)")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--epochs", type=int, default=10)
