@@ -293,6 +293,8 @@ def main(argv=None) -> None:
     parser.add_argument("--seed", type=int, default=42, help="pipeline shuffle_seed")
     parser.add_argument("--seq-len", type=int, default=4096)
     parser.add_argument("--dp-sizes", type=int, nargs="+", default=[8, 16, 32])
+    parser.add_argument("--max-rows", type=int, default=0,
+                        help="use only the first N input rows (smoke runs; 0 = all, the pipeline's setting)")
     parser.add_argument("--megatron-check-rows", type=int, default=200,
                         help="check this many kept rows with Megatron's SFT tokenizer (0 skips)")
     args = parser.parse_args(argv)
@@ -301,6 +303,8 @@ def main(argv=None) -> None:
 
     t0 = time.time()
     rows = read_rows(args.input, ["problem", "generated_solution", "sample_id"])
+    if args.max_rows > 0:
+        rows = rows[: args.max_rows]
     print(f"read {len(rows)} rows from {args.input} ({time.time() - t0:.0f}s)", flush=True)
     prompts = [render_template(PROMPT_TEMPLATE, r) for r in rows]
     responses = [render_template(RESPONSE_TEMPLATE, r) for r in rows]

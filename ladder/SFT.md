@@ -108,6 +108,15 @@ pyyaml; sympy + antlr4-python3-runtime for the MATH equivalence check).
 
 ## Tests
 
-`python -m pytest ladder/tests/test_sft_scripts.py -p no:cacheprovider -o addopts=""` (CPU): data preparation
-against the pipeline's functions (when ../pretrain_LLM_pipeline exists), boundary / overlong drops, schedule,
-eval problems / grading / summary, and the train / export / eval launchers' plans.
+- `python -m pytest ladder/tests/test_sft_scripts.py -p no:cacheprovider -o addopts=""` (CPU, no dependencies):
+  data preparation against the pipeline's functions (when ../pretrain_LLM_pipeline exists), boundary / overlong
+  drops, schedule, eval problems / grading / summary, the train / export / eval launchers' plans.
+- `python -m pytest ladder/tests/test_sft_megatron_data.py -p no:cacheprovider -o addopts=""` (CPU, Megatron env with
+  the ladder tokenizers): prepare_sft_data.py end to end on synthetic rows, then Megatron's VarlenDataset + identity
+  SFTTokenizer on its output, item by item against the pipeline's example (tokens, targets, loss mask), Llama3 and
+  Qwen3 tokenizers.
+- `bash ladder/sft/smoke_sft.sh` (one node, see run_sft.sh): 4000 rows x 2 epochs (~125 steps) from a real ladder
+  checkpoint, export of every checkpoint, a quick vLLM eval, then `ladder/sft/check_sft_smoke.py`: the run
+  finished, the loss is finite, starts low (pretrained weights loaded) and goes down, LR peaks and decays to 0, the
+  epoch checkpoints exist, head metrics are as expected (d = 0), every export passed its logits check, eval
+  results exist.

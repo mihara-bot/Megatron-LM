@@ -17,6 +17,13 @@ source ladder/sft/common.sh                  # -> PRETRAIN_RUN, SFT_DIR (the nam
 SBATCH_1GPU=(sbatch --parsable -A polaris -p polaris -N 1 --ntasks-per-node=1 --gpus-per-node=1
              --cpus-per-task=16 --mem=128G -o logs/%x-%j.out)
 
+# ---- tests and smoke (run once before the real jobs; not submitted by this file) --------------------------
+# CPU, Megatron env: Megatron's data path on prepared data vs the pipeline's encoding, launchers, eval logic
+#   python -m pytest ladder/tests/test_sft_megatron_data.py ladder/tests/test_sft_scripts.py -p no:cacheprovider -o addopts=
+# 1 node: ~125 SFT steps from this run's checkpoint -> export -> quick vLLM eval -> checks (log ends in SMOKE OK)
+#   VLLM_PYTHON=$VLLM_PYTHON sbatch -J sft-smoke -A polaris -p polaris -N 1 --ntasks-per-node=1 --gpus-per-node=8 \
+#     --cpus-per-task=128 --mem=512G -t 03:00:00 -o logs/%x-%j.out --wrap 'srun --ntasks=1 ht-run bash ladder/sft/smoke_sft.sh'
+
 # ---- train: 1 node (8 GPUs), Megatron env ----------------------------------------------------------------
 # -> $SFT_DIR/ckpt/iter_<N>, one checkpoint per epoch
 TRAIN_JOB=$(SFT_DATA_DIR=$DATA/sft_megatron/omi2_500k_ep10_llama3 ENTRY=ladder/sft/train_sft.sh \
