@@ -6,6 +6,7 @@
 #   mkdir -p logs
 #   CONFIG=llama3_r1 OPT=muon LR=1e-3 sbatch --nodes=2 ladder/launch/slurm.sbatch
 #   CONFIG=llama3_r1 LR=1e-3 MODE=branch TPP=20 sbatch --nodes=1 ladder/launch/slurm.sbatch
+#   ENTRY=ladder/sft/train_sft.sh CONFIG=llama3_r1 LR=1e-3 SFT_DATA_DIR=... sbatch --nodes=1 ladder/launch/slurm.sbatch
 # Defaults below are this cluster's paths; override any of them the same way.
 #
 # QoS (docs/polaris user guide, section 2):
@@ -49,5 +50,7 @@ export NNODES=$SLURM_NNODES
 export GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 
 # ht-run (Polaris launcher) binds each task to the CPUs and GPUs this job was given; keep it after srun.
+# ENTRY: the per-node script (default ladder/train.sh; ladder/sft/train_sft.sh for SFT).
+export ENTRY=${ENTRY:-ladder/train.sh}
 srun --ntasks="$NNODES" --ntasks-per-node=1 --kill-on-bad-exit=1 ht-run \
-    bash -c 'NODE_RANK=$SLURM_NODEID exec bash ladder/train.sh'
+    bash -c 'NODE_RANK=$SLURM_NODEID exec bash "$ENTRY"'

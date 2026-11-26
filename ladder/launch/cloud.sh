@@ -27,4 +27,5 @@ export MASTER_PORT=${MASTER_PORT:-29500}
 unset WORLD_SIZE RANK LOCAL_RANK   # torchrun sets these per GPU worker
 echo "node $NODE_RANK of $NNODES, master $MASTER_ADDR:$MASTER_PORT"
 
-exec bash "$(dirname "${BASH_SOURCE[0]}")/../train.sh"
+# ENTRY: the per-node script (default ladder/train.sh; ladder/sft/train_sft.sh for SFT).
+exec bash "${ENTRY:-$(dirname "${BASH_SOURCE[0]}")/../train.sh}"

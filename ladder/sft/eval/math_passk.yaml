@@ -1,0 +1,76 @@
+# Generation-based pass@k on GSM8K test, MATH-500, AMC-2023 and Countdown with vLLM (ladder/sft/eval/eval_vllm.py).
+# Same tasks, prompts, graders and offline settings as pretrain_LLM_pipeline configs/eval/math_passk.yaml; only the
+# backend differs (vLLM on the exported HF model instead of HF generate on the training model).
+# Paths start with {data_root} (eval_vllm.py --data-root). The shared prompt is the SFT prompt template
+# (ladder/sft/prepare_sft_data.py PROMPT_TEMPLATE, {problem}); a task's prompt_template replaces it.
+
+tasks:
+  gsm8k:
+    # HF openai/gsm8k, config main, split test
+    path: "{data_root}/gsm8k/main/test-00000-of-00001.parquet"
+    expected_size: 1319
+    problem_field: question
+    gold_field: answer                # number after "####"
+    grader: gsm8k                     # last number in the last \boxed{} (else in the completion), numeric match
+    max_new_tokens: 512
+  math500:
+    # HF HuggingFaceH4/MATH-500, split test
+    path: "{data_root}/MATH-500/test.jsonl"
+    expected_size: 500
+    problem_field: problem
+    gold_field: answer
+    grader: math                      # last \boxed{}, Minerva normalization + sympy equivalence
+    max_new_tokens: 1024
+  amc23:
+    # HF math-ai/amc23 (directory read in full; hidden folders such as hfd.sh's .hfd/ are skipped)
+    path: "{data_root}/amc23"
+    expected_size: 40
+    problem_field: question
+    gold_field: answer
+    grader: math
+    max_new_tokens: 1024
+  countdown:
+    # TinyZero test split of HF Jiayi-Pan/Countdown-Tasks-3to4 (rows 327680..328703),
+    # made with ladder/sft/eval/prepare_countdown_eval.py
+    path: "{data_root}/countdown/test_tinyzero_1024.jsonl"
+    expected_size: 1024
+    problem_template: "Using the numbers {nums}, create an equation that equals {target}. You can use the basic arithmetic operations (+, -, *, /) and parentheses, and each number must be used exactly once. The answer is the equation itself, for example (1 + 2) * 3, not its value."
+    gold_fields: [nums, target]
+    grader: countdown
+    max_new_tokens: 1024
+    # Own prompt (pipeline): the equation boxed, two worked examples. Only {problem} is substituted.
+    prompt_template: |
+      Solve the following math problem. Make sure to put the final equation (only the equation, not its value) inside \boxed{}.
+
+      Problem:
+      Using the numbers [3, 5, 7], create an equation that equals 22. You can use the basic arithmetic operations (+, -, *, /) and parentheses, and each number must be used exactly once. The answer is the equation itself, for example (1 + 2) * 3, not its value.
+
+      Solution:
+      We need to combine 3, 5 and 7, each exactly once, to get 22.
+      Multiplying the two smaller numbers gives 3 * 5 = 15, and 15 + 7 = 22. So 3 * 5 + 7 = 22, and every number is used once.
+
+      The final equation is \boxed{3 * 5 + 7}.
+
+      Problem:
+      Using the numbers [8, 3, 6, 2], create an equation that equals 30. You can use the basic arithmetic operations (+, -, *, /) and parentheses, and each number must be used exactly once. The answer is the equation itself, for example (1 + 2) * 3, not its value.
+
+      Solution:
+      We need to combine 8, 3, 6 and 2, each exactly once, to get 30.
+      Trying 8 * 3 = 24 and 24 + 6 = 30 leaves 2 unused, so that does not work.
+      Instead, 8 + 2 = 10 and 6 - 3 = 3, and 10 * 3 = 30. So (8 + 2) * (6 - 3) = 30, and every number is used once.
+
+      The final equation is \boxed{(8 + 2) * (6 - 3)}.
+
+      Problem:
+      {problem}
+
+      Solution:
+    stop: ["\nProblem:"]              # the model may go on with a new few-shot problem instead of EOS
+
+sampling:
+  temperature: 0.6
+  top_p: 0.95
+  seed: 1234
+greedy: true                          # one extra greedy completion per problem -> greedy_acc
+num_samples: 64                       # pass@1, 2, 4, ..., 64 (the pipeline's offline setting)
+max_problems: 0                       # all: GSM8K 1319, MATH-500 500, AMC-2023 40, Countdown 1024

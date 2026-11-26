@@ -79,10 +79,10 @@ convention for every run in evaluation.
 
 ## SFT in Megatron (protocol A)
 
-Keep the run's head, no margin, no sfn penalty: load the pretraining checkpoint with `--finetune` and
-pass `HEAD=hfn MARGIN_D=0` for hfn runs, `HEAD=nfn MARGIN_D=0` for nfn and sfn runs (the plain head
-for the baseline). hfn keeps the final norm frozen, so the SFT checkpoint still folds on export. A
-mismatched head fails at load time instead of training on raw rows.
+Keep the run's head, no margin, no sfn penalty: hfn runs fine-tune with `HEAD=hfn MARGIN_D=0`, nfn and sfn
+runs with `HEAD=nfn MARGIN_D=0`, the baseline with the plain head. hfn keeps the final norm frozen, so the SFT
+checkpoint still folds on export. A mismatched head fails at load time instead of training on raw rows.
+`ladder/sft/train_sft.sh` does this from the pretraining run's variables; see SFT.md.
 
 ## Tests
 
