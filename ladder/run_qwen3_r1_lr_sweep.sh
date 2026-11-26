@@ -113,5 +113,5 @@ CONFIG=qwen3_r1 OPT=muon LR=5.6e-3 MODE=branch TPP=50 \
 # not fitted. Writes logs/lr_fit/lr_fit_qwen3_r1_muon.png and logs/lr_fit/lr_points_qwen3_r1_muon.csv.
 # Keep --window 2.0, the same as the Llama3 rungs: the window shifts lr* by 10-15%.
 # Needs numpy, scipy and matplotlib in the active environment.
-# python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config qwen3_r1 --opt muon \
-#   --window 2.0 --noise 1e-3 --out-dir logs/lr_fit
+python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config qwen3_r1 --opt muon \
+  --window 2.0 --noise 1e-3 --out-dir logs/lr_fit

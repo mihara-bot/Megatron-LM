@@ -103,5 +103,5 @@ CONFIG=qwen3_r2 OPT=muon LR=2.8e-3 MODE=branch TPP=50 \
 # Run this once jobs have finished. It reads every logs/*.out written so far; unfinished runs are listed,
 # not fitted. Writes logs/lr_fit/lr_fit_qwen3_r2_muon.png and logs/lr_fit/lr_points_qwen3_r2_muon.csv.
 # Keep --window 2.0, the same as the other rungs. Needs numpy, scipy and matplotlib.
-# python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config qwen3_r2 --opt muon \
-#   --window 2.0 --noise 1e-3 --out-dir logs/lr_fit
+python ladder/analysis/lr_fit.py --logs 'logs/*.out' --config qwen3_r2 --opt muon \
+  --window 2.0 --noise 1e-3 --out-dir logs/lr_fit
