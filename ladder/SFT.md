@@ -58,7 +58,9 @@ SFT_DATA_DIR=$DATA/sft_megatron/omi2_500k_ep10_llama3 ENTRY=ladder/sft/train_sft
 `ladder/sft/train_sft.sh` (any variable can be checked with `DRY_RUN=1 bash ladder/sft/train_sft.sh`):
 - start: the latest checkpoint of `$OUT_ROOT/runs/<run>/ckpt/<PRETRAIN_TAG>`, where the run is named from CONFIG / OPT
   / LR / HEAD vars as `ladder/train.sh` names it. Only the weights are loaded, through `--pretrained-checkpoint`.
-  A rerun resumes from the SFT checkpoints.
+  A rerun resumes from the SFT checkpoints. A decay branch also saves on its way, so the latest checkpoint must be
+  the run's target (`--exit-interval`, else `--train-iters`, of the last `cmd_<tag>_*.sh` there); otherwise SFT
+  (and `export.sh TARGET=pretrained`) stops, unless `ALLOW_UNFINISHED_PRETRAIN=1`.
 - head: hfn -> hfn (s kept, final norm frozen), nfn / sfn -> nfn, plain -> plain; all with d = 0.
 - optimizer: Muon (`ladder/configs/opt/muon.sh`) by default, whatever the pretraining run used (`OPT` only names that
   run, default muon); `SFT_OPT=adamw` switches and adds `_adamw` to the SFT run name. Peak LR = pretraining LR / 3
@@ -74,7 +76,9 @@ and the number of steps all match.
 
 ## 3. Export and offline eval
 
-Two steps, two environments; `ladder/sft/run_sft.sh` has both, chained after training.
+Two steps, two environments; `ladder/sft/run_sft.sh` has both, chained after training (`sft_chain`: train ->
+export -> eval per pretraining run, plus the pre-SFT reference; currently the llama3_r2 TPP50 runs of
+`ladder/margin/run_margin_pretrain.sh` and their plain-head baseline).
 
 ```bash
 # export (1 GPU, Megatron env): Megatron checkpoints -> HF directories

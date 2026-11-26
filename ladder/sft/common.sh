@@ -9,7 +9,8 @@
 #   SFT_TAG       SFT run-name suffix (default omi2_500k_ep10)
 #   SFT_OPT       SFT optimizer, ladder/configs/opt/<SFT_OPT>.sh: muon (default, whatever OPT is) | adamw; a
 #                 non-default one is added to the SFT run name
-# Sets: PRETRAIN_RUN PRETRAIN_CKPT PRETRAIN_HEAD_ARGS SFT_NAME SFT_DIR SFT_HEAD_ARGS SFT_OPT TOKENIZER (family default)
+# Sets: PRETRAIN_RUN PRETRAIN_CKPT PRETRAIN_HEAD_ARGS SFT_NAME SFT_DIR SFT_HEAD_ARGS SFT_OPT TOKENIZER (family default);
+# functions tracked_iter, check_pretrain_finished
 #
 # SFT head (protocol A): the pretraining head with no margin and no sfn penalty. hfn stays hfn (same s, final
 # norm still frozen, so the SFT checkpoint folds on export); nfn and sfn use nfn (same geometry); plain stays
@@ -48,4 +49,28 @@ TOKENIZER=${TOKENIZER:-$_TOKENIZER_DEFAULT}
 tracked_iter() {   # latest iteration in a Megatron checkpoint directory, empty if none
     local f=$1/latest_checkpointed_iteration.txt
     if [ -f "$f" ]; then cat "$f"; fi
+}
+
+# The pretraining checkpoint directory's target iteration, from the last command ladder/train.sh wrote for this tag
+# (--exit-interval, else --train-iters); empty without one. A decay branch also saves on its way to the end, so a
+# checkpoint alone does not mean the run is done.
+pretrain_target() {
+    local cmd
+    cmd=$(ls "$OUT_ROOT/runs/$PRETRAIN_RUN/cmd_${PRETRAIN_TAG}_"*.sh 2>/dev/null | tail -n 1 || true)
+    if [ -z "$cmd" ]; then return 0; fi
+    python3 -c '
+import shlex, sys
+cmd = shlex.split(open(sys.argv[1]).read())
+flag = "--exit-interval" if "--exit-interval" in cmd else "--train-iters"
+print(cmd[cmd.index(flag) + 1])' "$cmd"
+}
+
+check_pretrain_finished() {   # check_pretrain_finished <iteration>: exit 1 unless it is the run's target
+    local target
+    target=$(pretrain_target)
+    if [ -n "$1" ] && [ -n "$target" ] && [ "$1" != "$target" ] && [ "${ALLOW_UNFINISHED_PRETRAIN:-0}" != 1 ]; then
+        echo "$PRETRAIN_CKPT is at iteration $1, but its run trains it to $target: still running?" \
+             "(ALLOW_UNFINISHED_PRETRAIN=1 goes ahead anyway)" >&2
+        exit 1
+    fi
 }

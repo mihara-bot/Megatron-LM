@@ -24,7 +24,8 @@
 # Optional: OPT (the pretraining run's optimizer, default muon: it names the run), SFT_OPT (default muon),
 #   HEAD / MARGIN_D / MARGIN_REVERSE / HEAD_SCALE / SFN_WEIGHT (the pretraining run's), PRETRAIN_TAG,
 #   PRETRAIN_RUN, SFT_TAG, SFT_LR, SFT_GBS (examples per step), SEED (default 1234), WANDB_PROJECT, VENV, EXTRA_ARGS,
-#   NNODES / NODE_RANK / MASTER_ADDR / MASTER_PORT / GPUS_PER_NODE (set by the launchers), DRY_RUN=1
+#   NNODES / NODE_RANK / MASTER_ADDR / MASTER_PORT / GPUS_PER_NODE (set by the launchers), DRY_RUN=1,
+#   ALLOW_UNFINISHED_PRETRAIN=1 (start although the pretraining checkpoint is short of its run's target)
 # Output: $OUT_ROOT/sft/<run>_<PRETRAIN_TAG>_sft_<SFT_TAG>/{ckpt,tb,cmd_*.sh,sft_data_stats.json}.
 # Rerunning resumes from that ckpt directory; the pretraining checkpoint is only the starting fallback.
 set -euo pipefail
@@ -69,6 +70,7 @@ PRETRAIN_ITER=$(tracked_iter "$PRETRAIN_CKPT")
 if [ -z "$PRETRAIN_ITER" ] && [ "${DRY_RUN:-0}" != 1 ]; then
     echo "no checkpoint in $PRETRAIN_CKPT (latest_checkpointed_iteration.txt missing)" >&2; exit 1
 fi
+check_pretrain_finished "$PRETRAIN_ITER"   # common.sh: not a save on the way to the run's end
 SFT_ITER=$(tracked_iter "$SFT_DIR/ckpt")
 if [ -n "$SFT_ITER" ] && [ "$SFT_ITER" -ge "$TRAIN_ITERS" ]; then
     echo "$SFT_NAME already reached iteration $TRAIN_ITERS; nothing to do"; exit 0

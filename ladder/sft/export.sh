@@ -13,6 +13,7 @@
 #   TARGET   sft (default) | pretrained: the pretraining checkpoint SFT starts from (the pre-SFT reference)
 #   ITERS    latest (default) | all | space-separated iterations
 #   VENV     Megatron environment (activated by export_hf.sh); FORCE=1 re-export; DRY_RUN=1 print only
+#   ALLOW_UNFINISHED_PRETRAIN=1   TARGET=pretrained: export the latest checkpoint although its run is not done
 # Output: <SFT dir>/hf/iter_<N>, or for TARGET=pretrained <pretraining run>/hf/<PRETRAIN_TAG>_iter<N>.
 # A directory that already has export_meta.json is kept unless FORCE=1.
 set -euo pipefail
@@ -52,6 +53,7 @@ all)
 *)
     ITER_LIST=$ITERS ;;
 esac
+if [ "$TARGET" = pretrained ] && [ "$ITERS" = latest ]; then check_pretrain_finished "${ITER_LIST:-}"; fi
 echo "== export $TARGET of $SFT_NAME: iterations [${ITER_LIST:-?}] of $CKPT_DIR"
 
 DONE=()

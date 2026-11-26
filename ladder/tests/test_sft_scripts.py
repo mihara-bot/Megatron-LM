@@ -255,6 +255,31 @@ def test_train_sft_plan(tmp_path, sft_data, env, head, run):
     assert flag(cmd, "--optimizer") == "muon"
 
 
+def test_train_sft_requires_finished_pretraining(tmp_path, sft_data):
+    run = tmp_path / "runs" / "llama3_r2_muon_lr2e-3_hfn_d0.02"
+    ckpt = run / "ckpt" / "tpp50"
+    ckpt.mkdir(parents=True)
+    (run / "cmd_tpp50_20261126-010000.sh").write_text("pretrain_gpt.py --train-iters 55000 --exit-interval 27500\n")
+    (run / "cmd_main_20261126-000000.sh").write_text("pretrain_gpt.py --train-iters 55000\n")
+    env = {"CONFIG": "llama3_r2", "OPT": "muon", "LR": "2e-3", "HEAD": "hfn", "MARGIN_D": "0.02",
+           "OUT_ROOT": tmp_path, "SFT_DATA_DIR": sft_data, "PRETRAIN_TAG": "tpp50"}
+    (ckpt / "latest_checkpointed_iteration.txt").write_text("23375")       # a save on the decay
+    res = run_script("ladder/sft/train_sft.sh", env)
+    assert res.returncode != 0 and "trains it to 27500" in res.stderr
+    assert run_script("ladder/sft/train_sft.sh", {**env, "ALLOW_UNFINISHED_PRETRAIN": "1"}).returncode == 0
+    res = run_script("ladder/sft/export.sh", {**env, "TARGET": "pretrained"})
+    assert res.returncode != 0 and "trains it to 27500" in res.stderr
+    (ckpt / "latest_checkpointed_iteration.txt").write_text("27500")
+    res = run_script("ladder/sft/train_sft.sh", env)
+    assert res.returncode == 0, res.stderr
+    res = run_script("ladder/sft/export.sh", {**env, "TARGET": "pretrained"})
+    assert res.returncode == 0 and f"OUT={run}/hf/tpp50_iter27500 " in res.stdout, res.stderr
+    main = run / "ckpt" / "main"                                            # no --exit-interval: --train-iters
+    main.mkdir()
+    (main / "latest_checkpointed_iteration.txt").write_text("55000")
+    assert run_script("ladder/sft/train_sft.sh", {**env, "PRETRAIN_TAG": "main"}).returncode == 0
+
+
 @pytest.mark.parametrize("env,opt,pre_run,suffix", [
     ({}, "muon", "llama3_r1_muon_lr2e-3", ""),                                  # defaults: Muon run, Muon SFT
     ({"OPT": "adamw"}, "muon", "llama3_r1_adamw_lr2e-3", ""),                   # AdamW-pretrained, still Muon SFT
