@@ -77,7 +77,7 @@ and the number of steps all match.
 ## 3. Export and offline eval
 
 Two steps, two environments; `ladder/sft/run_sft.sh` has both, chained after training (`sft_chain`: train ->
-export -> eval per pretraining run, plus the pre-SFT reference; currently the llama3_r2 TPP50 runs of
+export -> eval per pretraining run, plus the pre-SFT reference; the llama3_r2 and llama3_r1 TPP50 runs of
 `ladder/margin/run_margin_pretrain.sh` and their plain-head baseline).
 
 ```bash
@@ -108,8 +108,18 @@ a single model), plus one line per model in `<X>/eval/summary.jsonl` (keys as th
 vLLM samples differently from HF generate, so per-sample outputs differ from the pipeline's, but the metric
 distributions are the same.
 
-vLLM is not in the NGC image: point `VLLM_PYTHON` at an environment that has it (and transformers, pyarrow,
-pyyaml; sympy + antlr4-python3-runtime for the MATH equivalence check).
+vLLM is not in the NGC image, and must not go into the Megatron environment (it brings its own torch, which
+would replace the image's torch that TransformerEngine is built against). `ladder/env/setup_vllm_env.sh` builds a
+separate venv (vLLM 0.11.0 by default: CUDA 12.8 wheels, NVIDIA driver >= 570; transformers < 5, pyarrow, pyyaml,
+sympy + antlr4-python3-runtime 4.11 for the MATH equivalence check) and records its versions in
+`requirements.lock`; `ladder/env/check_vllm_env.py --gpu --tokenizer <llama-3 tokenizer>` checks it on a GPU (the
+command is at the top of the setup script). eval.sh runs `VLLM_PYTHON` through `ladder/sft/eval/run_isolated.sh`,
+which drops the submitting shell's PYTHONPATH and the package directories of LD_LIBRARY_PATH, so the Megatron
+venv and the image's torch libraries cannot leak into the vLLM process.
+
+```bash
+VLLM_VENV=/fast/users/zhuangxinlin/envs/vllm bash ladder/env/setup_vllm_env.sh   # once, no GPU needed
+```
 
 ## Tests
 

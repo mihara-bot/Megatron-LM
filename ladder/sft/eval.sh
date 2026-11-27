@@ -15,7 +15,8 @@
 #                (the layout export.sh writes), else <parent>/eval/<name>; plus a suffix when TASKS /
 #                NUM_SAMPLES / MAX_PROBLEMS are set, so a quick subset never overwrites the full results
 #   DATA_ROOT    eval data root (default /fast/users/zhuangxinlin/data)
-#   VLLM_PYTHON  python of the vLLM environment (default: python)
+#   VLLM_PYTHON  python of the vLLM environment (default: python); ladder/env/setup_vllm_env.sh builds one. It runs
+#                through ladder/sft/eval/run_isolated.sh, without the submitting shell's PYTHONPATH / package libraries
 #   TASKS, NUM_SAMPLES, MAX_PROBLEMS   override math_passk.yaml
 #   FORCE=1      re-evaluate a model whose summary.json exists; DRY_RUN=1 print the commands only
 # Output: <eval dir>/{summary.json,<task>.jsonl}, and one line per model in <eval dir>/../summary.jsonl.
@@ -74,7 +75,7 @@ for m in ${MODELS[@]+"${MODELS[@]}"}; do
          ${EVAL_ARGS[@]+"${EVAL_ARGS[@]}"})
     echo "+ ${cmd[*]}"
     if [ "${DRY_RUN:-0}" = 1 ]; then continue; fi
-    "${cmd[@]}"
+    bash ladder/sft/eval/run_isolated.sh "${cmd[@]}"   # without the Megatron shell's PYTHONPATH / torch libraries
     python3 - "$out/summary.json" "$(dirname "$out")/summary.jsonl" <<'EOF'
 import json, os, sys
 summary, dest = sys.argv[1], sys.argv[2]
