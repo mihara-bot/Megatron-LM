@@ -315,7 +315,8 @@ def test_probe_margin_optimum_matches_theory():
         s = sum(row)
         qs.append([x / s for x in row])
         ms.append(rng.choice([-3.0, -1.2, 0.0, 0.3, 1.2, 3.0, 8.0]))
-    got = probe.margin_optimum(torch.tensor(qs), torch.tensor(ms))
+    # float64 inputs: torch.tensor defaults to float32, and rounding q and m to float32 alone moves p* by ~1e-8
+    got = probe.margin_optimum(torch.tensor(qs, dtype=torch.float64), torch.tensor(ms, dtype=torch.float64))
     for q, m, row in zip(qs, ms, got.tolist()):
         assert max(abs(a - b) for a, b in zip(row, T.margin_optimum(q, m))) < 1e-9
 
