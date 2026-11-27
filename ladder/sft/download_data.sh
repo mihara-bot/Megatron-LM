@@ -24,7 +24,7 @@ python ladder/sft/make_sft_subset.py --input $DATA/OpenMathInstruct-2/data --fil
   --columns problem generated_solution expected_answer problem_source --disjoint-column problem
 
 
-# process into Megatron format
+# process SFT data into Megatron format
 python ladder/sft/prepare_sft_data.py --input $DATA/sft/openmathinstruct2_500k/train \
   --tokenizer /fast/users/zhuangxinlin/tokenizers/llama-3 \
   --output-dir $DATA/sft_megatron/omi2_500k_ep10_llama3 --epochs 10
