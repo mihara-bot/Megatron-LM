@@ -17,13 +17,21 @@
 #             pretraining LR / 3, 3% linear warmup, cosine to 0
 #   batch     the pipeline steps over 32 packed 4096-token rows (~315 examples); here the global batch counts
 #             examples (online packing, dp_balanced) and defaults to stats.json's match for this DP size
-#   no validation; one checkpoint per epoch, all kept
+#   one checkpoint per epoch, all kept; pass@k is computed offline on them (export.sh, eval.sh)
 # Different: the sampling order inside a step and the packing (online, balanced over DP ranks).
+# Added: a validation loss on the held-out split when $SFT_DATA_DIR/valid.parquet exists (prepare_sft_data.py
+# --output-name valid); the pipeline logged none. It reads no training data and changes nothing in training.
+#   Every evaluation covers the whole set once, in one eval iteration whose global batch is the set (packed like
+#   training), so the curve is on fixed examples; one evaluation per epoch by default (at the epoch checkpoints),
+#   plus one at the end of training (the final checkpoint).
 #
 # Required: CONFIG, LR, OUT_ROOT, SFT_DATA_DIR (TOKENIZER defaults to the family's, see common.sh)
 # Optional: OPT (the pretraining run's optimizer, default muon: it names the run), SFT_OPT (default muon),
 #   HEAD / MARGIN_D / MARGIN_REVERSE / HEAD_SCALE / SFN_WEIGHT (the pretraining run's), PRETRAIN_TAG,
 #   PRETRAIN_RUN, SFT_TAG, SFT_LR, SFT_GBS (examples per step), SEED (default 1234), WANDB_PROJECT, VENV, EXTRA_ARGS,
+#   SFT_TOKENS_PER_RANK (tokens per packed microbatch per GPU, default SEQ_LEN; larger = fewer, bigger microbatches,
+#   same examples per step and same loss), SFT_EVAL (auto: validation when valid.parquet exists | 1: require it |
+#   0: off), SFT_EVAL_INTERVAL (default: iterations per epoch, the checkpoint interval),
 #   NNODES / NODE_RANK / MASTER_ADDR / MASTER_PORT / GPUS_PER_NODE (set by the launchers), DRY_RUN=1,
 #   ALLOW_UNFINISHED_PRETRAIN=1 (start although the pretraining checkpoint is short of its run's target)
 # Output: $OUT_ROOT/sft/<run>_<PRETRAIN_TAG>_sft_<SFT_TAG>/{ckpt,tb,cmd_*.sh,sft_data_stats.json}.
@@ -65,6 +73,42 @@ if [ $((GBS % DP)) -ne 0 ]; then echo "SFT_GBS=$GBS must be a multiple of the da
 TRAIN_ITERS=$((ROWS / GBS))            # every step reads GBS rows of train.parquet, never past its end
 EPOCH_ITERS=$((EXAMPLES / GBS))        # ~ one epoch: the per-epoch checkpoint interval
 SFT_LR=${SFT_LR:-$(awk -v x="$LR" 'BEGIN { printf "%.6g", x / 3 }')}
+# Packed microbatch size per GPU (--max-seqlen-per-dp-cp-rank). The loss is per token over the whole step and
+# attention stays within each example (cu_seqlens), so this only trades memory for fewer microbatches.
+SFT_TOKENS_PER_RANK=${SFT_TOKENS_PER_RANK:-$SEQ_LEN}
+if ! [[ "$SFT_TOKENS_PER_RANK" =~ ^[0-9]+$ ]] || [ "$SFT_TOKENS_PER_RANK" -lt "$SEQ_LEN" ]; then
+    echo "SFT_TOKENS_PER_RANK=$SFT_TOKENS_PER_RANK must be an integer >= the sequence length $SEQ_LEN" >&2; exit 1
+fi
+
+# Validation loss on $SFT_DATA_DIR/valid.parquet (see the header).
+SFT_EVAL=${SFT_EVAL:-auto}
+VALID=$SFT_DATA_DIR/valid.parquet
+VALID_STATS=$SFT_DATA_DIR/valid_stats.json
+EVAL_ARGS=(--eval-iters 0 --eval-interval "$TRAIN_ITERS")
+case "$SFT_EVAL" in
+0)
+    EVAL_NOTE="no validation (SFT_EVAL=0)" ;;
+1 | auto)
+    if [ -f "$VALID" ] && [ -f "$VALID_STATS" ]; then
+        VAL_ROWS=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["rows_out"])' "$VALID_STATS")
+        EVAL_GBS=$((VAL_ROWS - VAL_ROWS % DP))        # the eval global batch must divide by the DP size
+        if [ "$EVAL_GBS" -lt "$DP" ]; then echo "$VALID_STATS: $VAL_ROWS rows, fewer than the $DP GPUs" >&2; exit 1; fi
+        EVAL_INTERVAL=${SFT_EVAL_INTERVAL:-$EPOCH_ITERS}   # every epoch, at the same iterations as the checkpoints
+        if [ "$EVAL_INTERVAL" -lt 1 ]; then EVAL_INTERVAL=1; fi
+        EVAL_ARGS=(--valid-data-path "$VALID" --eval-iters 1 --eval-global-batch-size "$EVAL_GBS"
+                   --eval-interval "$EVAL_INTERVAL")
+        EVAL_NOTE="validation loss on $EVAL_GBS examples ($VALID) every $EVAL_INTERVAL iterations"
+        if [ $((VAL_ROWS % DP)) -ne 0 ]; then
+            EVAL_NOTE+="; $VAL_ROWS rows is not a multiple of $DP GPUs, so evaluations rotate by $((VAL_ROWS % DP))"
+        fi
+    elif [ "$SFT_EVAL" = 1 ]; then
+        echo "SFT_EVAL=1 but no $VALID + $VALID_STATS (prepare_sft_data.py --output-name valid)" >&2; exit 1
+    else
+        EVAL_NOTE="no validation ($VALID missing: prepare_sft_data.py --output-name valid)"
+    fi ;;
+*)
+    echo "SFT_EVAL must be auto, 1 or 0, got $SFT_EVAL" >&2; exit 1 ;;
+esac
 
 PRETRAIN_ITER=$(tracked_iter "$PRETRAIN_CKPT")
 if [ -z "$PRETRAIN_ITER" ] && [ "${DRY_RUN:-0}" != 1 ]; then
@@ -86,19 +130,18 @@ ARGS=(
     --min-lr 0
     --lr-decay-style cosine
     --lr-warmup-fraction 0.03
-    # data: one example per row, packed online into <= SEQ_LEN tokens per rank and microbatch
+    # data: one example per row, packed online into <= SFT_TOKENS_PER_RANK tokens per rank and microbatch
     --use-varlen-dataset
     --train-data-path "$DATA"
     --tokenizer-type SFTTokenizer
     --tokenizer-model "$TOKENIZER"
     --sft-tokenizer-prompt-format identity
-    --max-seqlen-per-dp-cp-rank "$SEQ_LEN"
+    --max-seqlen-per-dp-cp-rank "$SFT_TOKENS_PER_RANK"
     --calculate-per-token-loss
     --no-create-attention-mask-in-dataloader
     --num-workers 4
     --seed "$SEED"
-    --eval-iters 0
-    --eval-interval "$TRAIN_ITERS"
+    "${EVAL_ARGS[@]}"
     # start from the pretraining checkpoint (weights only) unless the SFT directory has one to resume
     --pretrained-checkpoint "$PRETRAIN_CKPT"
     --load "$SFT_DIR/ckpt"
@@ -134,6 +177,7 @@ if [ "$NODE_RANK" = 0 ]; then
          "(pipeline ${EX_PER_STEP} per step), $TRAIN_ITERS iterations, checkpoint every $EPOCH_ITERS"
     echo "   optimizer $SFT_OPT, LR $SFT_LR (pretraining $LR / 3), 3% warmup, cosine to 0; $NNODES x $GPUS_PER_NODE GPUs" \
          "${SFT_ITER:+(resuming at $SFT_ITER)}"
+    echo "   packing <= $SFT_TOKENS_PER_RANK tokens per GPU and microbatch; $EVAL_NOTE"
 fi
 if [ "${DRY_RUN:-0}" = 1 ]; then
     printf '%q ' pretrain_gpt.py "${ARGS[@]}"; echo
@@ -144,6 +188,7 @@ mkdir -p "$SFT_DIR/ckpt" "$SFT_DIR/tb"
 if [ "$NODE_RANK" = 0 ]; then
     printf '%q ' pretrain_gpt.py "${ARGS[@]}" > "$SFT_DIR/cmd_$(date +%Y%m%d-%H%M%S).sh"
     cp "$STATS" "$SFT_DIR/sft_data_stats.json"
+    if [ -n "${EVAL_GBS:-}" ]; then cp "$VALID_STATS" "$SFT_DIR/sft_valid_stats.json"; fi
 fi
 # VarlenDataset loads the parquet through `datasets`, which converts it to an Arrow cache once and memory-maps
 # it; keep that cache on shared storage and never reach for the Hub (the cluster cannot).

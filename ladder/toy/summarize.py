@@ -6,6 +6,11 @@
 Finds $TOY_ROOT/out/runs/<run>/hf/main_iter<N>/probe.json and $TOY_ROOT/out/sft/<run>_main_sft_toy_<mode>/hf/
 iter_<N>/probe.json. `table` uses each run's last probed iteration, averages over seeds (mean and sd), prints the
 key columns and writes every row and the grouped means to $TOY_ROOT/report/{pretrain,sft}_{rows,summary}.csv.
+Also in report/:
+  pretrain_iters.csv, sft_iters.csv   every probed checkpoint (pretraining every 500 iterations, SFT every epoch)
+  pretrain_decode{,_summary}.csv      the last checkpoint decoded at temperature T and through the post-hoc margin
+                                      map (decode = T | map_m): multi-position KL, H(p), junk, ... per value
+  sft_temps{,_summary}.csv            the last SFT checkpoint sampled at every temperature of the probe
 """
 import argparse
 import csv
@@ -35,6 +40,7 @@ SFT_COLS = [
     ("heldout_path_entropy", "path entropy"), ("train_pass@1", "train pass@1"), ("train_cover_count", "train coverage"),
     ("tf_hop_kl", "tf hop KL"), ("tf_hop_h_p", "tf hop H(p)"), ("tf_hop_junk", "tf hop junk"),
 ]
+DECODE_COLS = [(k, k) for k in ("kl", "h_p", "junk", "supp_kl", "top1_p", "det_top1", "det_ce")]
 
 
 def variant_of(tag: str) -> str:
@@ -78,6 +84,19 @@ def path_row(res: dict, temp: str = "T1") -> dict:
     return row
 
 
+def decode_rows(res: dict) -> list:
+    """The probe's decoding sweeps of a model's walk distribution: temperature, and the post-hoc margin map."""
+    w = res.get("walk") or {}
+    out = []
+    for kind, key in (("T", "temperature"), ("map_m", "posthoc_margin")):
+        for e in w.get(key, []):
+            multi, det = e.get("multi") or {}, e.get("det") or {}
+            out.append({"decode": kind, "value": e["value"],
+                        **{k: multi.get(k) for k in ("kl", "h_p", "junk", "supp_kl", "top1_p")},
+                        "det_top1": det.get("top1_p"), "det_ce": det.get("ce")})
+    return out
+
+
 def collect(root: str):
     out = os.path.join(root, "out")
     pre, sft = [], []
@@ -88,7 +107,7 @@ def collect(root: str):
             continue
         res = json.load(open(path))
         pre.append({"run": run, "variant": variant_of(m["tag"]), "lr": m["lr"], "seed": int(m["seed"]),
-                    "iteration": int(it.group(1)), **walk_row(res)})
+                    "iteration": int(it.group(1)), **walk_row(res), "probe": path})
     for path in sorted(glob.glob(os.path.join(out, "sft", "*", "hf", "*", "probe.json"))):
         name = path.split(os.sep)[-4]
         s, it = SFT_RE.match(name), ITER_RE.search(path.split(os.sep)[-2])
@@ -98,7 +117,7 @@ def collect(root: str):
         res = json.load(open(path))
         sft.append({"run": s["run"], "variant": variant_of(m["tag"]), "lr": m["lr"], "seed": int(m["seed"]),
                     "sft_mode": s["mode"], "iteration": int(it.group(1)),
-                    **{f"walk_{k}": v for k, v in walk_row(res).items()}, **path_row(res)})
+                    **{f"walk_{k}": v for k, v in walk_row(res).items()}, **path_row(res), "probe": path})
     return pre, sft
 
 
@@ -183,13 +202,36 @@ def cmd_lr(args):
     print(f"lowest walk KL: LR={best['lr']}  ->  PHASE=grid LR={best['lr']} bash ladder/toy/run_toy.sh")
 
 
+def by_run(r):
+    return (r["lr"], variant_order(r["variant"]), r.get("sft_mode", ""), r["seed"], r["iteration"])
+
+
 def cmd_table(args):
-    pre, sft = collect(args.root)
+    pre_all, sft_all = collect(args.root)
     lr = args.lr
-    pre = [r for r in last_iteration(pre) if lr is None or r["lr"] == lr]
-    sft = [r for r in last_iteration(sft, ("run", "sft_mode")) if lr is None or r["lr"] == lr]
+    pre_all = sorted((r for r in pre_all if lr is None or r["lr"] == lr), key=by_run)
+    sft_all = sorted((r for r in sft_all if lr is None or r["lr"] == lr), key=by_run)
+    pre = last_iteration(pre_all)
+    sft = last_iteration(sft_all, ("run", "sft_mode"))
     report = os.path.join(args.root, "report")
     os.makedirs(report, exist_ok=True)
+    write_csv(os.path.join(report, "pretrain_iters.csv"), pre_all)
+    write_csv(os.path.join(report, "sft_iters.csv"), sft_all)
+    keys = ("run", "variant", "lr", "seed", "iteration")
+    dec = [{**{k: r[k] for k in keys}, **d} for r in pre for d in decode_rows(json.load(open(r["probe"])))]
+    write_csv(os.path.join(report, "pretrain_decode.csv"), dec)
+    write_csv(os.path.join(report, "pretrain_decode_summary.csv"),
+              sorted(group(dec, ["variant", "lr", "decode", "value"], DECODE_COLS),
+                     key=lambda r: (r["lr"], variant_order(r["variant"]), r["decode"], r["value"])))
+    temps = []
+    for r in sft:
+        res = json.load(open(r["probe"]))
+        for t in (res.get("paths") or {}).get("sample", {}):
+            temps.append({**{k: r[k] for k in keys}, "sft_mode": r["sft_mode"], "temp": t, **path_row(res, t)})
+    write_csv(os.path.join(report, "sft_temps.csv"), temps)
+    write_csv(os.path.join(report, "sft_temps_summary.csv"),
+              sorted(group(temps, ["sft_mode", "variant", "lr", "temp"], SFT_COLS),
+                     key=lambda r: (r["sft_mode"], r["lr"], variant_order(r["variant"]), r["temp"])))
     g_pre = sorted(group(pre, ["variant", "lr"], PRE_COLS), key=lambda r: (r["lr"], variant_order(r["variant"])))
     print(f"== pretraining, last probed checkpoint ({len(pre)} runs)")
     print_table(g_pre, ["variant", "lr"], PRE_COLS)

@@ -14,6 +14,14 @@ Output (--output-dir):
   stats.json     counts, tokens, the pipeline's packed schedule replayed, and the Megatron global batch
                  (examples per step) / train iterations that match it; train_sft.sh reads it.
 
+The validation split goes next to them with --output-name valid (valid.parquet + valid_stats.json), which
+train_sft.sh picks up for the validation loss:
+
+    python ladder/sft/prepare_sft_data.py \
+        --input /fast/users/zhuangxinlin/data/sft/openmathinstruct2_500k/validation \
+        --tokenizer /fast/users/zhuangxinlin/tokenizers/llama-3 \
+        --output-dir /fast/users/zhuangxinlin/data/sft_megatron/omi2_500k_ep10_llama3 --epochs 1 --output-name valid
+
 What matches the pipeline:
   * example = prompt + response + EOS, prompt = the plain-text template with {problem}, response =
     generated_solution; prompt tokens unsupervised, response + EOS supervised. In Megatron the identity chat
@@ -286,13 +294,17 @@ def write_parquet(path: str, rows: Sequence[Mapping[str, Any]], prompts: Sequenc
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--input", required=True, help="make_sft_subset.py train split (file or directory)")
+    parser.add_argument("--input", required=True,
+                        help="make_sft_subset.py split, train or validation (file or directory)")
     parser.add_argument("--tokenizer", required=True, help="HF tokenizer directory (the pretraining one)")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42, help="pipeline shuffle_seed")
     parser.add_argument("--seq-len", type=int, default=4096)
     parser.add_argument("--dp-sizes", type=int, nargs="+", default=[8, 16, 32])
+    parser.add_argument("--output-name", default="train",
+                        help="train (default): train.parquet + stats.json; any other name N: N.parquet + "
+                             "N_stats.json in the same directory (valid: the validation loss of train_sft.sh)")
     parser.add_argument("--max-rows", type=int, default=0,
                         help="use only the first N input rows (smoke runs; 0 = all, the pipeline's setting)")
     parser.add_argument("--megatron-check-rows", type=int, default=200,
@@ -331,11 +343,13 @@ def main(argv=None) -> None:
         print(f"Megatron SFT tokenizer (identity) agrees on {len(kept)} rows", flush=True)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    write_parquet(os.path.join(args.output_dir, "train.parquet"), rows, prompts, responses, orders)
-    with open(os.path.join(args.output_dir, "stats.json"), "w") as f:
+    parquet = f"{args.output_name}.parquet"
+    stats_name = "stats.json" if args.output_name == "train" else f"{args.output_name}_stats.json"
+    write_parquet(os.path.join(args.output_dir, parquet), rows, prompts, responses, orders)
+    with open(os.path.join(args.output_dir, stats_name), "w") as f:
         json.dump(stats, f, indent=2)
     print(json.dumps({k: v for k, v in stats.items() if k != "prompt_template"}, indent=2))
-    print(f"wrote {args.output_dir}/train.parquet ({stats['rows_out']} rows) and stats.json "
+    print(f"wrote {args.output_dir}/{parquet} ({stats['rows_out']} rows) and {stats_name} "
           f"({time.time() - t0:.0f}s)")
 
 

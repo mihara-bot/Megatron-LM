@@ -26,6 +26,11 @@ export OPT=muon PRETRAIN_TAG=tpp50
 # run resumed on another GPU count keeps them. 312 divides by 1, 2, 4 and 8 GPUs.
 SFT_GPUS=${SFT_GPUS:-2}
 export SFT_GBS=${SFT_GBS:-312}
+# Tokens per packed microbatch per GPU: ~4 microbatches per GPU and step on 2 GPUs (a step is ~122k tokens) instead
+# of ~15 at 4096; R1 pretraining ran 8 x 4096 = 32768 per microbatch on these GPUs. Same examples and loss per step.
+export SFT_TOKENS_PER_RANK=${SFT_TOKENS_PER_RANK:-16384}
+# Validation loss during training: on when $SFT_DATA_DIR/valid.parquet exists (ladder/sft/download_data.sh, last
+# step); pass@k stays offline (export + eval below). SFT_EVAL=0 turns it off, SFT_EVAL=1 requires it.
 # Idle resources (ladder/launch/slurm.sbatch, QoS): --qos=polaris_idle has no per-user GPU cap but starts only on free
 # nodes and can be preempted at any time; a preempted job is requeued and starts over, which every step survives:
 # train resumes from its latest epoch checkpoint (losing < 1602 iterations), export keeps the exports that passed

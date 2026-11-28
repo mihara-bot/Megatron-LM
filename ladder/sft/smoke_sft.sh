@@ -12,6 +12,8 @@
 # Optional:
 #   SUBSET       make_sft_subset.py train split (default $DATA_ROOT/sft/openmathinstruct2_500k/train)
 #   SMOKE_ROWS   rows used (default 4000), 2 epochs, global batch SFT_GBS (default 64): ~125 steps
+#   VALID_SUBSET, SMOKE_VALID_ROWS   validation loss on the first rows (default 200) of the validation split
+#   SFT_TOKENS_PER_RANK   default 16384, as ladder/sft/run_sft.sh
 #   VLLM_PYTHON  vLLM environment; without it the eval step is skipped
 #   DATA_ROOT, OUT_ROOT, TOKENIZER, GPUS_PER_NODE
 # The smoke SFT run is <run>_<PRETRAIN_TAG>_sft_smoke and is deleted and redone on every call.
@@ -26,6 +28,9 @@ export SFT_TAG=smoke
 source ladder/sft/common.sh
 SUBSET=${SUBSET:-$DATA_ROOT/sft/openmathinstruct2_500k/train}
 SMOKE_ROWS=${SMOKE_ROWS:-4000}
+VALID_SUBSET=${VALID_SUBSET:-$DATA_ROOT/sft/openmathinstruct2_500k/validation}
+SMOKE_VALID_ROWS=${SMOKE_VALID_ROWS:-200}
+export SFT_TOKENS_PER_RANK=${SFT_TOKENS_PER_RANK:-16384}
 export SFT_GBS=${SFT_GBS:-64}
 FAMILY=${CONFIG%%_*}
 SMOKE_DATA=$OUT_ROOT/sft_smoke_data/${FAMILY}_${SMOKE_ROWS}
@@ -39,9 +44,13 @@ if [ ! -f "$SMOKE_DATA/stats.json" ]; then
     python ladder/sft/prepare_sft_data.py --input "$SUBSET" --tokenizer "$TOKENIZER" --output-dir "$SMOKE_DATA" \
         --epochs 2 --max-rows "$SMOKE_ROWS" --megatron-check-rows 200
 fi
+if [ ! -f "$SMOKE_DATA/valid_stats.json" ]; then
+    python ladder/sft/prepare_sft_data.py --input "$VALID_SUBSET" --tokenizer "$TOKENIZER" --output-dir "$SMOKE_DATA" \
+        --epochs 1 --max-rows "$SMOKE_VALID_ROWS" --output-name valid --megatron-check-rows 0
+fi
 
 echo "== [2/5] train"
-SFT_DATA_DIR=$SMOKE_DATA bash ladder/sft/train_sft.sh
+SFT_DATA_DIR=$SMOKE_DATA SFT_EVAL=1 bash ladder/sft/train_sft.sh
 
 echo "== [3/5] export every checkpoint"
 ITERS=all bash ladder/sft/export.sh
@@ -56,4 +65,4 @@ fi
 
 echo "== [5/5] check"
 python ladder/sft/check_sft_smoke.py --sft-dir "$SFT_DIR" --stats "$SMOKE_DATA/stats.json" \
-    --head "$( [ "$HEAD" = sfn ] && echo nfn || echo "$HEAD" )" ${VLLM_PYTHON:+--expect-eval}
+    --head "$( [ "$HEAD" = sfn ] && echo nfn || echo "$HEAD" )" --expect-valid ${VLLM_PYTHON:+--expect-eval}

@@ -28,3 +28,8 @@ python ladder/sft/make_sft_subset.py --input $DATA/OpenMathInstruct-2/data --fil
 python ladder/sft/prepare_sft_data.py --input $DATA/sft/openmathinstruct2_500k/train \
   --tokenizer /fast/users/zhuangxinlin/tokenizers/llama-3 \
   --output-dir $DATA/sft_megatron/omi2_500k_ep10_llama3 --epochs 10
+
+# validation split for the validation loss during SFT: valid.parquet + valid_stats.json in the same directory
+python ladder/sft/prepare_sft_data.py --input $DATA/sft/openmathinstruct2_500k/validation \
+  --tokenizer /fast/users/zhuangxinlin/tokenizers/llama-3 \
+  --output-dir $DATA/sft_megatron/omi2_500k_ep10_llama3 --epochs 1 --output-name valid

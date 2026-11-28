@@ -47,6 +47,15 @@ prompt/response boundary, which Megatron's identity template cannot represent. T
 or empty rows, and boundary rows should be ~0. `stats.json` also replays the pipeline's packing (15851 steps of 32
 rows, ~315 examples per step) and gives the matching Megatron global batch per data-parallel size.
 
+The validation split, for the validation loss during training, goes into the same directory as `valid.parquet` +
+`valid_stats.json`:
+
+```bash
+python ladder/sft/prepare_sft_data.py --input $DATA/sft/openmathinstruct2_500k/validation \
+    --tokenizer /fast/users/zhuangxinlin/tokenizers/llama-3 \
+    --output-dir $DATA/sft_megatron/omi2_500k_ep10_llama3 --epochs 1 --output-name valid
+```
+
 ## 2. Training
 
 ```bash
@@ -65,10 +74,19 @@ SFT_DATA_DIR=$DATA/sft_megatron/omi2_500k_ep10_llama3 ENTRY=ladder/sft/train_sft
 - optimizer: Muon (`ladder/configs/opt/muon.sh`) by default, whatever the pretraining run used (`OPT` only names that
   run, default muon); `SFT_OPT=adamw` switches and adds `_adamw` to the SFT run name. Peak LR = pretraining LR / 3
   (`SFT_LR`), 3% warmup, cosine to 0.
-- batch: `--use-varlen-dataset` packs examples online (dp_balanced, `--max-seqlen-per-dp-cp-rank 4096`), and the
-  global batch counts examples: by default the pipeline's examples per step rounded to the data-parallel size
-  (8 GPUs: 312 examples, 16025 iterations; 16 GPUs: 320, 15625; pipeline: 15851). `SFT_GBS` overrides it.
-- one checkpoint per epoch (all kept), no validation. Output: `$OUT_ROOT/sft/<run>_<tag>_sft_omi2_500k_ep10/`.
+- batch: `--use-varlen-dataset` packs examples online (dp_balanced), and the global batch counts examples: by
+  default the pipeline's examples per step rounded to the data-parallel size (8 GPUs: 312 examples, 16025
+  iterations; 16 GPUs: 320, 15625; pipeline: 15851). `SFT_GBS` overrides it; `run_sft.sh` pins 312 so the batch and
+  schedule do not depend on `SFT_GPUS`. `SFT_TOKENS_PER_RANK` (`--max-seqlen-per-dp-cp-rank`, default 4096;
+  `run_sft.sh` and the smoke use 16384) caps the tokens of one packed microbatch per GPU: larger means fewer,
+  bigger microbatches for the same examples and the same per-token loss (attention stays within each example).
+- one checkpoint per epoch (all kept). Output: `$OUT_ROOT/sft/<run>_<tag>_sft_omi2_500k_ep10/`.
+- validation loss (`lm loss validation` in TensorBoard), when `$SFT_DATA_DIR/valid.parquet` exists (`SFT_EVAL=auto`;
+  `1` requires it, `0` turns it off): every evaluation is one eval iteration over the whole validation set
+  (`--eval-global-batch-size` = its rows, rounded down to the data-parallel size), so every point is on the same
+  examples; once per epoch (`SFT_EVAL_INTERVAL`, default the iterations per epoch = 1602, so at the epoch
+  checkpoints) plus one at the end of training (the final checkpoint). The
+  pipeline logged no validation loss; it reads no training data. pass@k stays offline (section 3).
 
 What differs from the pipeline: the packing (online and balanced over the ranks, instead of next-fit
 rows) and therefore which examples share a step. The examples, their order, tokens, mask, optimizer, LR schedule

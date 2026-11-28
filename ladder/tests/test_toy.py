@@ -5,6 +5,7 @@
 Standard library for most tests. The probe tests need torch (and transformers for the end-to-end one) and are
 skipped without them; run them on the cluster.
 """
+import csv
 import json
 import math
 import os
@@ -473,10 +474,15 @@ def fake_probe(kl, pass1=None):
     cls["multi"] = {"n": 10, "kl": kl, "ce": 1.0 + kl, "h_p": 1.0, "h_q": 1.0, "top1_p": 0.5, "junk": 0.01, "m": 0.0,
                     "hnorm": 16.0, "kl_theory": kl, "kl_q_theory": 0.0, "h_theory": 1.0, "top1_theory": 0.5,
                     "supp_kl": kl}
-    res = {"reference": {"entropy_rate": 0.9}, "walk": {"classes": cls, "quantiles": {}, "head": {}, "s_fit": {"s": 20.0}}}
+    sweep = [{"value": v, "multi": {"kl": kl * v, "h_p": v, "junk": 0.01 * v, "supp_kl": kl, "top1_p": 0.5},
+              "det": {"top1_p": 1.0, "ce": 0.01}} for v in (1.0, 2.0)]
+    res = {"reference": {"entropy_rate": 0.9},
+           "walk": {"classes": cls, "quantiles": {}, "head": {}, "s_fit": {"s": 20.0}, "temperature": sweep,
+                    "posthoc_margin": sweep[:1]}}
     if pass1 is not None:
-        res["paths"] = {"mode": "cond", "sample": {"T1": {"heldout": {"pass@1": pass1, "cover_count": 0.5}}},
-                        "tf": {}}
+        res["paths"] = {"mode": "cond", "tf": {},
+                        "sample": {"T1": {"heldout": {"pass@1": pass1, "cover_count": 0.5}},
+                                   "T1.3": {"heldout": {"pass@1": pass1 / 2, "cover_count": 0.7}}}}
     return res
 
 
@@ -510,7 +516,16 @@ def test_summarize(tmp_path):
     res = subprocess.run([sys.executable, "ladder/toy/summarize.py", "table", "--root", str(tmp_path)], cwd=REPO,
                          capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
-    assert (tmp_path / "report" / "pretrain_summary.csv").exists() and (tmp_path / "report" / "sft_rows.csv").exists()
+    report = tmp_path / "report"
+    assert (report / "pretrain_summary.csv").exists() and (report / "sft_rows.csv").exists()
+    assert len(list(csv.DictReader(open(report / "pretrain_iters.csv")))) == 6          # every checkpoint
+    dec = list(csv.DictReader(open(report / "pretrain_decode_summary.csv")))
+    hfn = {(r["decode"], r["value"]): r for r in dec if r["variant"] == "hfn_rev_d0.02"}
+    assert set(hfn) == {("T", "1.0"), ("T", "2.0"), ("map_m", "1.0")}
+    assert float(hfn["T", "2.0"]["kl"]) == pytest.approx(0.1) and hfn["T", "2.0"]["seeds"] == "2"
+    temps = {r["temp"]: r for r in csv.DictReader(open(report / "sft_temps_summary.csv"))}
+    assert float(temps["T1"]["heldout_pass@1"]) == pytest.approx(0.45)
+    assert float(temps["T1.3"]["heldout_pass@1"]) == pytest.approx(0.225)
     order = sorted(["hfn_rev_d0.05", "plain", "sfn_d0.02", "hfn_d0.02", "hfn_rev_d0.02", "hfn_d0"],
                    key=summarize.variant_order)
     assert order == ["plain", "hfn_d0", "hfn_d0.02", "hfn_rev_d0.02", "hfn_rev_d0.05", "sfn_d0.02"]

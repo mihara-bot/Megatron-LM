@@ -6,6 +6,7 @@ Fails (exit 1) with one line per problem:
   * training reached --train-iters; every logged lm loss finite; the first one below 5 (a pretrained model, not a
     random one: ln V ~ 12) and the last few lower than the first few
   * LR peaked at --lr and decayed to ~0 (cosine to 0)
+  * with --expect-valid: the validation loss (lm loss validation) logged at least twice, finite, below 5
   * a checkpoint per epoch plus the final one, the tracker at the final iteration
   * head metrics: present for nfn / hfn (ce loss = lm loss, margin r = 1, since d = 0 in SFT), absent for plain
   * every HF export passed its Megatron vs HF logits check
@@ -40,6 +41,7 @@ def main(argv=None):
     parser.add_argument("--stats", required=True)
     parser.add_argument("--head", choices=["plain", "nfn", "hfn"], required=True)
     parser.add_argument("--expect-eval", action="store_true")
+    parser.add_argument("--expect-valid", action="store_true")
     args = parser.parse_args(argv)
     problems = []
 
@@ -66,6 +68,13 @@ def main(argv=None):
         first, last = sum(values[:k]) / k, sum(values[-k:]) / k
         check(last < first, f"lm loss did not go down: first {first:.4f}, last {last:.4f}")
         print(f"lm loss {values[0]:.4f} -> {values[-1]:.4f} over {loss[-1][0]} iterations")
+    if args.expect_valid:
+        val = sc.get("lm loss validation", [])
+        if check(len(val) >= 2, f"only {len(val)} 'lm loss validation' points in tensorboard"):
+            values = [v for _, v in val]
+            check(all(math.isfinite(v) for v in values), "non-finite validation loss")
+            check(values[0] < 5.0, f"first validation loss {values[0]:.3f} >= 5")
+            print(f"validation loss {values[0]:.4f} -> {values[-1]:.4f} at iterations {[s for s, _ in val]}")
     lr = [v for _, v in sc.get("learning-rate", [])]
     if check(bool(lr), "no learning-rate in tensorboard"):
         check(abs(max(lr) - peak_lr) <= 0.05 * peak_lr, f"peak LR {max(lr):.3g} != --lr {peak_lr:.3g}")
