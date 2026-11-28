@@ -17,6 +17,7 @@ The result loads in transformers / vLLM as a plain model, no remote code.
 import json
 import math
 import os
+import shutil
 import sys
 import time
 
@@ -98,6 +99,28 @@ def dense_spec(model, args) -> DenseSpec:
     )
 
 
+TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "tokenizer.model",
+                   "vocab.json", "merges.txt", "added_tokens.json", "chat_template.jinja", "chat_template.json")
+
+
+def copy_tokenizer(src, out_dir, tokenizer) -> list:
+    """Copy the tokenizer files training used, unchanged, into the export.
+
+    tokenizer.save_pretrained would rewrite them in this environment's transformers format; transformers 5
+    writes tokenizer_class TokenizersBackend, which transformers 4.x (the vLLM eval environment) cannot load.
+    A hub id instead of a directory falls back to save_pretrained.
+    """
+    if not os.path.isdir(src):
+        tokenizer.save_pretrained(out_dir)
+        return ["save_pretrained"]
+    files = [f for f in TOKENIZER_FILES if os.path.isfile(os.path.join(src, f))]
+    if "tokenizer.json" not in files and "tokenizer.model" not in files:
+        raise SystemExit(f"{src} has neither tokenizer.json nor tokenizer.model")
+    for f in files:
+        shutil.copy2(os.path.join(src, f), os.path.join(out_dir, f))
+    return files
+
+
 @torch.no_grad()
 def compare_logits(megatron_model, out_dir, vocab, args) -> dict:
     """Megatron (with its own head) vs the exported HF model on the same random tokens."""
@@ -177,7 +200,7 @@ def main():
         json.dump(config, f, indent=2)
     with open(os.path.join(out, "generation_config.json"), "w") as f:
         json.dump({"bos_token_id": tokenizer.bos_token_id, "eos_token_id": tokenizer.eos_token_id}, f, indent=2)
-    tokenizer.save_pretrained(out)
+    tokenizer_files = copy_tokenizer(args.tokenizer_model, out, tokenizer)
 
     meta = {
         "source_checkpoint": checkpoint.load,
@@ -201,6 +224,8 @@ def main():
             "note": "token_margin / soft_feature_norm_weight are the export call's settings; the "
                     "training run's are in its cmd_*.sh. The margin is training-only.",
         },
+        "tokenizer_files": tokenizer_files,
+        "tokenizer_source": args.tokenizer_model,
         "tokenizer_note": "ladder data is tokenized EOS-only (no BOS); the HF tokenizer may add BOS "
                           "by default. Evaluate every run with the same convention.",
     }
