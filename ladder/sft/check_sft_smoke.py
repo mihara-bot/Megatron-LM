@@ -96,8 +96,7 @@ def main(argv=None):
         if not check(os.path.exists(meta_path), f"iteration {it} not exported ({meta_path})"):
             continue
         v = json.load(open(meta_path)).get("validation") or {}
-        check(v.get("top1_agreement", 0) >= 0.98 and v.get("mean_kl", 1) <= 1e-2,
-              f"iteration {it}: Megatron vs HF logits check {v}")
+        check(v.get("passed") is True, f"iteration {it}: Megatron vs HF logits check {v}")
         if args.expect_eval:
             found = glob.glob(os.path.join(args.sft_dir, "eval", f"iter_{it}_*", "summary.json"))
             if check(bool(found), f"iteration {it}: no eval summary"):

@@ -7,7 +7,10 @@ Launch through ladder/export/export_hf.sh (one GPU, TP = PP = 1). Steps:
      into a plain lm_head (ladder/export/hf_mapping.py)
   3. write safetensors, config.json, generation_config.json, the tokenizer and export_meta.json
   4. reload the directory with transformers and compare its logits with the Megatron model's on
-     random token sequences (KL, top-1 agreement, max |logit diff|); fail above the thresholds
+     random token sequences (KL, top-1 agreement up to near-ties, max |logit diff|); fail above the
+     thresholds. The comparison runs in bf16 on two different kernel stacks (TE vs PyTorch), so it
+     catches mapping and argument errors; exactness of the mapping is tests/unit_tests/models/
+     test_gpt_token_margin.py::test_hf_export_matches_megatron (fp32)
 The result loads in transformers / vLLM as a plain model, no remote code.
 """
 
@@ -42,8 +45,12 @@ def add_export_args(parser):
     group.add_argument("--hf-validate-len", type=int, default=512, help="Their length in tokens.")
     group.add_argument("--hf-max-mean-kl", type=float, default=1e-2,
                        help="Fail if the mean per-token KL(Megatron || HF) exceeds this.")
-    group.add_argument("--hf-min-top1", type=float, default=0.98,
-                       help="Fail if the top-1 agreement is below this.")
+    group.add_argument("--hf-min-top1", type=float, default=0.99,
+                       help="Fail if the top-1 agreement up to near-ties (--hf-top1-tol) is below this.")
+    group.add_argument("--hf-top1-tol", type=float, default=0.5,
+                       help="A position agrees when HF's top token is within this many logits of Megatron's "
+                            "top logit (under Megatron's logits): bf16 noise between the two kernel stacks "
+                            "flips the first place among near-equal logits, which random tokens make common.")
     group.add_argument("--hf-max-shard-gb", type=float, default=5.0, help="Safetensors shard size.")
     return parser
 
@@ -108,15 +115,25 @@ def compare_logits(megatron_model, out_dir, vocab, args) -> dict:
     ref = ref[..., : meg.shape[-1]]
     lp_m, lp_h = meg.log_softmax(-1), ref.log_softmax(-1)
     kl = (lp_m.exp() * (lp_m - lp_h)).sum(-1)
-    return {
+    # How far below Megatron's top logit Megatron puts the token HF ranks first: ~0 for a flip between
+    # near-equal logits (bf16 noise), several logits for a mapping error.
+    top_gap = meg.max(-1).values - meg.gather(-1, ref.argmax(-1, keepdim=True)).squeeze(-1)
+    check = {
         "sequences": args.hf_validate_seqs,
         "length": args.hf_validate_len,
         "mean_kl": kl.mean().item(),
         "max_kl": kl.max().item(),
         "top1_agreement": (meg.argmax(-1) == ref.argmax(-1)).float().mean().item(),
+        "top1_agreement_within_tol": (top_gap <= args.hf_top1_tol).float().mean().item(),
+        "top1_gap_max": top_gap.max().item(),
         "max_abs_logit_diff": (meg - ref).abs().max().item(),
         "mean_abs_logit": meg.abs().mean().item(),
+        "thresholds": {"max_mean_kl": args.hf_max_mean_kl, "min_top1_within_tol": args.hf_min_top1,
+                       "top1_tol": args.hf_top1_tol},
     }
+    check["passed"] = bool(check["mean_kl"] <= args.hf_max_mean_kl
+                           and check["top1_agreement_within_tol"] >= args.hf_min_top1)
+    return check
 
 
 def main():
@@ -195,7 +212,7 @@ def main():
         json.dump(meta, f, indent=2)
     if args.hf_validate_seqs > 0:
         check = meta["validation"]
-        if check["mean_kl"] > args.hf_max_mean_kl or check["top1_agreement"] < args.hf_min_top1:
+        if not check["passed"]:
             raise SystemExit(f"logits check failed (see {out}/export_meta.json): {check}")
     print(f"> exported to {out}", flush=True)
 
