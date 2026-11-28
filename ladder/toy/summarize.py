@@ -27,7 +27,7 @@ PRE_COLS = [
     ("top1_p", "top-1 p"), ("top1_theory", "top-1 p*"), ("junk", "junk mass"), ("supp_kl", "KL on supp"),
     ("m", "logit margin m"), ("hnorm", "||h||"), ("det_top1", "det top-1"), ("det_gap", "det cos gap p50"),
     ("supp_gap", "multi supp gap p50"), ("cos_sibling", "cos sibling rows"), ("s_fit", "s fit"),
-    ("ce_excess", "CE - entropy rate"),
+    ("kl_all", "KL all positions"),
 ]
 SFT_COLS = [
     ("heldout_pass@1", "heldout pass@1"), ("heldout_pass@8", "pass@8"), ("heldout_pass@64", "pass@64"),
@@ -49,7 +49,10 @@ def walk_row(res: dict) -> dict:
     multi = cls["multi"]
     det = [cls[c] for c in ("det", "end") if cls[c]["n"]]
     n_all = sum(c["n"] for c in cls.values() if c["n"])
-    ce_all = sum(c["ce"] * c["n"] for c in cls.values() if c["n"]) / n_all
+    # The excess CE over the floor is the mean KL(q || p) over the probe positions, i.e. CE minus the mean H(q) of
+    # those same positions. Not CE minus the stream's entropy rate: a probe row drops its last context (an <eos>,
+    # H = 0), which puts the positions' mean H(q) ~rate/249 = 0.0035 above the rate, more than the excess itself.
+    kl_all = sum(c["kl"] * c["n"] for c in cls.values() if c["n"]) / n_all
     row = {k: multi.get(k) for k in ("kl", "kl_theory", "kl_q_theory", "h_p", "h_q", "h_theory", "top1_p",
                                       "top1_theory", "junk", "supp_kl", "m", "hnorm")}
     row["det_top1"] = sum(c["top1_p"] * c["n"] for c in det) / sum(c["n"] for c in det) if det else None
@@ -57,9 +60,7 @@ def walk_row(res: dict) -> dict:
     row["supp_gap"] = quant.get("multi_supp_gap", {}).get("p50")
     row["cos_sibling"] = w.get("head", {}).get("cos_sibling_mean")
     row["s_fit"] = w.get("s_fit", {}).get("s")
-    row["ce_all"] = ce_all
-    rate = res.get("reference", {}).get("entropy_rate")
-    row["ce_excess"] = ce_all - rate if rate is not None else None
+    row["kl_all"] = kl_all
     return row
 
 
@@ -175,9 +176,9 @@ def cmd_lr(args):
                   key=lambda r: float(r["lr"]))
     if not rows:
         raise SystemExit(f"no plain-head probe.json under {args.root}/out/runs")
-    print("lr        seed  iter   walk multi KL   CE - entropy rate   det top-1")
+    print("lr        seed  iter   walk multi KL   KL all positions    det top-1")
     for r in rows:
-        print(f"{r['lr']:<9} {r['seed']:<5} {r['iteration']:<6} {r['kl']:<15.5f} {fmt(r['ce_excess']):<19} {fmt(r['det_top1'])}")
+        print(f"{r['lr']:<9} {r['seed']:<5} {r['iteration']:<6} {r['kl']:<15.5f} {fmt(r['kl_all']):<19} {fmt(r['det_top1'])}")
     best = min(rows, key=lambda r: r["kl"])
     print(f"lowest walk KL: LR={best['lr']}  ->  PHASE=grid LR={best['lr']} bash ladder/toy/run_toy.sh")
 

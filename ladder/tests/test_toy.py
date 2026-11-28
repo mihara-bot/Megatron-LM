@@ -489,7 +489,7 @@ def test_summarize(tmp_path):
     assert {r["iteration"] for r in last} == {6250}
     g = summarize.group([r for r in last if r["variant"] == "hfn_rev_d0.02"], ["variant", "lr"], summarize.PRE_COLS)
     assert g[0]["seeds"] == 2 and g[0]["kl"] == pytest.approx(0.05) and g[0]["kl_sd"] == pytest.approx(math.sqrt(2e-4))
-    assert g[0]["ce_excess"] == pytest.approx(0.05 + 0.1)
+    assert g[0]["kl_all"] == pytest.approx(0.05)
     gs = summarize.group(sft, ["sft_mode", "variant", "lr"], summarize.SFT_COLS)
     assert gs[0]["heldout_pass@1"] == pytest.approx(0.45)
     res = subprocess.run([sys.executable, "ladder/toy/summarize.py", "lr", "--root", str(tmp_path)], cwd=REPO,
