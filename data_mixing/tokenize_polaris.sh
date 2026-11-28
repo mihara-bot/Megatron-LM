@@ -7,8 +7,8 @@
 #   FAMILY=llama3 bash data_mixing/tokenize_polaris.sh cleanup   # after a passing report: delete the train pieces
 #   steps one at a time: verify | tokenize | merge | inspect | report | cleanup
 #
-# Tests first (no GPU, a few minutes; output in data_mixing-test-<job>.out):
-#   sbatch --partition=polaris --account=polaris --job-name=dm-test --nodes=1 --ntasks=1 \
+# Tests first (1 GPU, a few minutes; the tests themselves only use the CPU; output in data_mixing-test-<job>.out):
+#   sbatch --partition=polaris --account=polaris --job-name=dm-test --nodes=1 --ntasks=1 --gres=gpu:h200:1 \
 #       --cpus-per-task=8 --mem=32G --time=00:30:00 --chdir="$PWD" --export=ALL,FAMILY=llama3 \
 #       --output="data_mixing-test-%j.out" \
 #       --wrap='srun --ntasks=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" ht-run bash -e data_mixing/tokenize_polaris.sh test'

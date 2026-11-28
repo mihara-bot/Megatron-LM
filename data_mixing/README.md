@@ -161,5 +161,5 @@ DM_TOKENIZER=/path/to/tokenizer python data_mixing/tests/test_parquet_e2e.py   #
 ```
 
 On Polaris, `FAMILY=llama3 bash data_mixing/tokenize_polaris.sh test` runs all of them, including the real
-tokenize, in the Megatron environment. The no-GPU sbatch line is at the top of that script. All of them
+tokenize, in the Megatron environment. The sbatch line (1 GPU) is at the top of that script. All of them
 also run under pytest (`-p no:cacheprovider -o addopts=""`).
