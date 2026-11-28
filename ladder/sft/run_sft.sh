@@ -3,8 +3,10 @@
 # the token-margin runs of ladder/margin/run_margin_pretrain.sh and the plain-head baseline with the same LR
 # (ladder/run_llama_r2_lr_sweep.sh, ladder/run_llama_r1_lr_sweep.sh). Data first: ladder/sft/download_data.sh.
 # Run from the Megatron-LM root with the Megatron uv environment active. `bash ladder/sft/run_sft.sh` submits every
-# chain at the bottom of the rungs in RUNGS (default both), e.g. `RUNGS=r1 bash ladder/sft/run_sft.sh`; to submit
-# one chain, paste the "common" block, the sft_chain function and that chain's line.
+# chain at the bottom of the rungs in RUNGS (default both), e.g. `RUNGS=r1 bash ladder/sft/run_sft.sh`; CHAINS picks
+# chains by name, e.g. `CHAINS="r1-plain r1-hfn-d0.02" bash ladder/sft/run_sft.sh`. SFT_GPUS: GPUs per SFT training
+# job (default 2; one node, so at most 8). IDLE: which steps run on idle resources (--qos=polaris_idle, see below),
+# e.g. `IDLE=1 RUNGS=r1 bash ladder/sft/run_sft.sh` or `IDLE=eval ...`.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 mkdir -p logs
@@ -19,13 +21,26 @@ export VLLM_PYTHON=/fast/users/zhuangxinlin/envs/vllm/bin/python   # built by la
 # tpp50 = the TPP50 decay branch (iteration 27500 on R2, 17500 on R1); train_sft.sh refuses a checkpoint short of
 # its run's end.
 export OPT=muon PRETRAIN_TAG=tpp50
+# Training job size. The global batch is fixed in examples rather than derived from the data-parallel size (train_sft.sh
+# would give 316 on 2 GPUs, 312 on 8): every chain then has the same batch and schedule whatever SFT_GPUS is, and a
+# run resumed on another GPU count keeps them. 312 divides by 1, 2, 4 and 8 GPUs.
+SFT_GPUS=${SFT_GPUS:-2}
+export SFT_GBS=${SFT_GBS:-312}
+# Idle resources (ladder/launch/slurm.sbatch, QoS): --qos=polaris_idle has no per-user GPU cap but starts only on free
+# nodes and can be preempted at any time; a preempted job is requeued and starts over, which every step survives:
+# train resumes from its latest epoch checkpoint (losing < 1602 iterations), export keeps the exports that passed
+# their check, eval skips the models with a summary.json (redoing the one it was on).
+#   IDLE=0 (default) standard QoS | 1 or all: every step | a comma list of train, export, eval (e.g. IDLE=eval)
+IDLE=${IDLE:-0}
 SBATCH_1GPU=(sbatch --parsable -A polaris -p polaris -N 1 --ntasks-per-node=1 --gpus-per-node=1
-             --cpus-per-task=16 --mem=128G -o logs/%x-%j.out)
+             --cpus-per-task=16 --mem=128G -o logs/%x-%j.out --open-mode=append)
 
 # sft_chain <name> CONFIG=.. LR=.. [HEAD=.. MARGIN_D=.. MARGIN_REVERSE=..] [AFTER=<job id>] [STEPS=train,export,eval]
+#           [IDLE=..]   (per-chain override of the IDLE above)
 # Submits, with afterok between them:
-#   train   1 node (8 GPUs), Megatron env: $SFT_DIR/ckpt/iter_<N>, one checkpoint per epoch; LR = pretraining LR / 3,
-#           Muon, global batch 312 examples, 16025 iterations (R2 trains ~0.8M tokens/s on 8 GPUs: ~1 h; R1 less)
+#   train   SFT_GPUS GPUs of one node, Megatron env: $SFT_DIR/ckpt/iter_<N>, one checkpoint per epoch (every 1602
+#           iterations); LR = pretraining LR / 3, Muon, global batch 312 examples, 16025 iterations, ~2B tokens.
+#           Time scales as 1 / SFT_GPUS: R2 ~1 h on 8 GPUs (~0.8M tokens/s), so ~4 h on 2; R1 less
 #   export  1 GPU, Megatron env: every SFT checkpoint -> $SFT_DIR/hf/iter_<N> (head folded, Megatron vs HF logits
 #           checked); the pre-SFT reference, the tpp50 checkpoint -> <pretraining run>/hf/tpp50_iter<N>
 #   eval    1 GPU, vLLM env: GSM8K / MATH-500 / AMC23 / Countdown pass@k of every export ->
@@ -34,38 +49,49 @@ SBATCH_1GPU=(sbatch --parsable -A polaris -p polaris -N 1 --ntasks-per-node=1 --
 # it, submit once that branch has finished. STEPS: a subset, e.g. STEPS=eval to redo the eval of existing exports
 # (it then has no dependency). Quick check of an export: TASKS=gsm8k NUM_SAMPLES=4 MAX_PROBLEMS=50 in eval's env.
 sft_chain() (
-    local name=$1 after="" steps=train,export,eval kv
+    local name=$1 after="" steps=train,export,eval idle=$IDLE kv s
     shift
+    if [ -n "${CHAINS:-}" ] && [[ " $CHAINS " != *" $name "* ]]; then return 0; fi
     export HEAD=plain MARGIN_D=0 MARGIN_REVERSE=0
     for kv in "$@"; do
         case $kv in
             AFTER=*) after=${kv#AFTER=} ;;
             STEPS=*) steps=${kv#STEPS=} ;;
+            IDLE=*) idle=${kv#IDLE=} ;;
             *) export "${kv?}" ;;
         esac
     done
+    case $idle in 0 | 1 | all) ;; *)
+        for s in ${idle//,/ }; do
+            case $s in train | export | eval) ;; *) echo "IDLE=$idle: use 0, 1, all or train,export,eval" >&2; exit 1 ;; esac
+        done ;;
+    esac
+    qos() {   # qos <step>: the QoS flag of that step's jobs (nothing for the standard QoS)
+        case ",$idle," in *,1,* | *,all,* | *,"$1",*) echo "--qos=polaris_idle" ;; esac
+    }
     unset PRETRAIN_RUN
     : "${CONFIG:?sft_chain $name: pass CONFIG=..}" "${LR:?sft_chain $name: pass LR=.., the pretraining LR}"
     source ladder/sft/common.sh               # -> PRETRAIN_RUN, SFT_DIR: the names train_sft.sh / export.sh use
     local train="" export_sft="" export_pre="" eval_sft="" eval_pre=""
     case ",$steps," in *,train,*)
-        train=$(ENTRY=ladder/sft/train_sft.sh sbatch --parsable --nodes=1 --time=12:00:00 -J "sft-$name" \
-            ${after:+--dependency=afterok:$after} ladder/launch/slurm.sbatch) ;;
+        train=$(ENTRY=ladder/sft/train_sft.sh GPUS_PER_NODE=$SFT_GPUS sbatch --parsable --nodes=1 $(qos train) \
+            --gpus-per-node="$SFT_GPUS" --cpus-per-task=$((16 * SFT_GPUS)) --mem=$((64 * SFT_GPUS))G \
+            --time=12:00:00 -J "sft-$name" ${after:+--dependency=afterok:$after} ladder/launch/slurm.sbatch) ;;
     esac
     case ",$steps," in *,export,*)
-        export_sft=$(ITERS=all "${SBATCH_1GPU[@]}" -J "sft-export-$name" -t 04:00:00 \
+        export_sft=$(ITERS=all "${SBATCH_1GPU[@]}" $(qos export) -J "sft-export-$name" -t 04:00:00 \
             ${train:+--dependency=afterok:$train} --wrap 'srun --ntasks=1 ht-run bash ladder/sft/export.sh')
-        export_pre=$(TARGET=pretrained "${SBATCH_1GPU[@]}" -J "pre-export-$name" -t 01:00:00 \
+        export_pre=$(TARGET=pretrained "${SBATCH_1GPU[@]}" $(qos export) -J "pre-export-$name" -t 01:00:00 \
             ${after:+--dependency=afterok:$after} --wrap 'srun --ntasks=1 ht-run bash ladder/sft/export.sh') ;;
     esac
     case ",$steps," in *,eval,*)
-        eval_sft=$(MODEL="$SFT_DIR/hf/iter_*" "${SBATCH_1GPU[@]}" -J "sft-eval-$name" -t 24:00:00 \
+        eval_sft=$(MODEL="$SFT_DIR/hf/iter_*" "${SBATCH_1GPU[@]}" $(qos eval) -J "sft-eval-$name" -t 24:00:00 \
             ${export_sft:+--dependency=afterok:$export_sft} --wrap 'srun --ntasks=1 ht-run bash ladder/sft/eval.sh')
-        eval_pre=$(MODEL="$OUT_ROOT/runs/$PRETRAIN_RUN/hf/${PRETRAIN_TAG}_iter*" "${SBATCH_1GPU[@]}" \
+        eval_pre=$(MODEL="$OUT_ROOT/runs/$PRETRAIN_RUN/hf/${PRETRAIN_TAG}_iter*" "${SBATCH_1GPU[@]}" $(qos eval) \
             -J "pre-eval-$name" -t 04:00:00 ${export_pre:+--dependency=afterok:$export_pre} \
             --wrap 'srun --ntasks=1 ht-run bash ladder/sft/eval.sh') ;;
     esac
-    echo "== $name: $PRETRAIN_RUN/$PRETRAIN_TAG -> $SFT_DIR"
+    echo "== $name: $PRETRAIN_RUN/$PRETRAIN_TAG -> $SFT_DIR$( [ "$idle" = 0 ] || echo " (idle QoS: $idle)" )"
     echo "   train ${train:--}  export ${export_sft:--} (pre ${export_pre:--})  eval ${eval_sft:--} (pre ${eval_pre:--})"
 )
 
