@@ -67,6 +67,8 @@ PHASE=lr bash ladder/toy/run_toy.sh                  # plain head over LR_GRID (
 python3 ladder/toy/summarize.py lr --root $TOY_ROOT  # -> the LR with the lowest walk KL
 PHASE=grid LR=<that LR> bash ladder/toy/run_toy.sh   # 15 variants x 3 seeds, each with SFT (3 node jobs)
 python3 ladder/toy/summarize.py table --root $TOY_ROOT
+PHASE=decode LR=<that LR> bash ladder/toy/run_toy.sh # re-sample the SFT models: T up to 2, margin map (1 node job)
+python3 ladder/toy/summarize.py table --root $TOY_ROOT --lr <that LR>   # -> report/sft_decode_summary.csv
 ```
 
 - `run_toy.sh` writes spec files (one chain per line) and submits `pack.sbatch` jobs: one node, 8 GPUs, 2 chains per
@@ -91,6 +93,14 @@ All against the exact `q`, on the same probe data for every model.
 | 3 usefulness | `walk.temperature`, `walk.posthoc_margin` (decoding the model's own `p`), `junk` (mass off the support), `supp_kl`; SFT: `paths.sample.T*.{train,heldout}` pass@k, `distinct`, `cover_count`, `cover_mass`, `fail`; `paths.tf` | does a reverse-margin model reach a (junk, entropy) or (pass@k, coverage) point that the plain model cannot reach by temperature or the post-hoc map? |
 
 `s_fit` is the `s` of `s cos(h, W)` that fits a model's distribution best (for comparison with `s = 60`).
+
+**Decoding with the margin map instead of training with the margin.** A model trained to the margin CE's optimum puts
+out `p*(q, m)`; a plain model puts out `p ~ q`, so mapping its `p` through `p'_k (1 - c p'_k) ~ p_k` gives the same
+distribution at decode time (`walk.posthoc_margin` checks this on the pretrained models). `PHASE=decode` samples the
+SFT models through that map (`probe.py --update --map-ms=...`, keys `M<m>` next to the temperatures `T<T>` in
+`paths.sample`); `report/sft_decode_summary.csv` then compares, per SFT mode and variant, temperature against the map
+(pass@k, distinct paths, coverage, and the failure rates such as `heldout_fail_bad_edge`), e.g. the plain-SFT model
+decoded through the map against a model whose SFT itself used the margin.
 
 ## Tests
 

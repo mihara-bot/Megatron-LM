@@ -2,6 +2,8 @@
 
     python ladder/toy/probe.py --data $TOY_ROOT/data --models <HF dir> [<HF dir> ...]
     python ladder/toy/probe.py --data $TOY_ROOT/data --paths --sft-mode cond --models <SFT HF dirs>
+    python ladder/toy/probe.py --data $TOY_ROOT/data --paths --sft-mode cond --update \
+        --temps 0.7,1.0,1.3,1.6,2.0 --map-ms=-0.6,-1.2,-2,-3,-5 --models <probed SFT HF dirs>
 
 Reads HF directories written by ladder/export/export_hf.sh (export_meta.json tells the LM head and margin) and
 writes <model>/probe.json. Every model sees the same probe data (fixed seed), so runs pair position by position.
@@ -26,9 +28,11 @@ paths  (--paths) The path task on training and held-out (s, t) pairs.
        tf: teacher forcing on paths drawn from the SFT mode's distribution: q = the mode's next hop, valid set =
          successors that still reach t (junk = mass outside it); classes copy (first node = s), hop_multi /
          hop_det (2+ / 1 valid next hops), stop (<eos> after t). For mode != cond also KL to the cond q.
-       sample: --samples completions per pair at each of --temps: pass@k (unbiased), valid rate, distinct valid
-         paths, coverage (distinct / all valid paths; cond probability mass of the distinct ones), entropy of the
-         valid paths drawn, failure types (graph.py check_generation), by span.
+       sample: --samples completions per pair at each temperature of --temps (key T<T>) and through the post-hoc
+         margin map at each logit margin of --map-ms (key M<m>; decode_probs): pass@k (unbiased), valid rate,
+         distinct valid paths, coverage (distinct / all valid paths; cond probability mass of the distinct ones),
+         entropy of the valid paths drawn, failure types (graph.py check_generation), by span.
+       --update adds the settings an existing probe.json lacks and keeps the rest (walk, tf, earlier samples).
 """
 import argparse
 import json
@@ -404,9 +408,35 @@ def probe_paths_tf(model, graph: G.Graph, pairs, mode: str, args, device) -> dic
     return {"positions": len(rows), "classes": {c: mean_of(met, cls == i) for i, c in enumerate(PATH_CLASSES)}}
 
 
+def decode_key(kind: str, value: float) -> str:
+    """probe.json name of a sampling setting: T<temperature> or M<logit margin of the post-hoc margin map>."""
+    return f"{kind}{value:g}"
+
+
+def decode_seed(base: int, kind: str, value: float) -> int:
+    seed = base + 1000 * int(round(value * 100))
+    return seed if kind == "T" else seed + 10_000_000
+
+
+def decode_probs(logits: torch.Tensor, kind: str, value: float) -> torch.Tensor:
+    """The next-token sampling distribution of a decoding setting.
+    T: softmax(logits / T).
+    M: the post-hoc margin map of p = softmax(logits) at logit margin m, i.e. margin_optimum with the model's own p
+       as q: p'_k (1 - c p'_k) proportional to p_k, c = 1 - e^{-m}. A model trained to the optimum of the margin CE
+       puts out the map of what a plain model puts out. Reverse m < 0 flattens the large probabilities (towards
+       sqrt(p) as m -> -inf) and only rescales the small ones, where temperature raises them as p^(1/T)."""
+    if kind == "T":
+        return torch.softmax(logits.float() / value, -1)
+    if kind == "M":
+        p = torch.softmax(logits.double(), -1)
+        return margin_optimum(p, torch.full((p.shape[0],), float(value), dtype=torch.float64, device=p.device))
+    raise ValueError(f"unknown decoding {kind!r} (T or M)")
+
+
 @torch.no_grad()
-def sample_paths(model, graph: G.Graph, pairs, n: int, temp: float, seed: int, device, batch: int) -> list:
-    """n completions per pair; returns per-pair lists of generated token-id lists (after the prompt)."""
+def sample_paths(model, graph: G.Graph, pairs, n: int, decode: tuple, seed: int, device, batch: int) -> list:
+    """n completions per pair with decode = (T, temperature) or (M, logit margin) (decode_probs); returns per-pair
+    lists of generated token-id lists (after the prompt)."""
     max_new = graph.num_layers + 1
     prompts = [G.path_prompt_ids(s, t) for s, t in pairs for _ in range(n)]
     gen = torch.Generator(device=device).manual_seed(seed)
@@ -417,7 +447,7 @@ def sample_paths(model, graph: G.Graph, pairs, n: int, temp: float, seed: int, d
         done = torch.zeros(ids.shape[0], dtype=torch.bool, device=device)
         for _ in range(max_new):
             logits = model(input_ids=ids).logits[:, -1, :].float()
-            nxt = torch.multinomial(torch.softmax(logits / temp, -1), 1, generator=gen)
+            nxt = torch.multinomial(decode_probs(logits, *decode), 1, generator=gen)
             ids = torch.cat([ids, nxt], 1)
             done |= nxt.squeeze(1) == G.EOS
             if bool(done.all()):
@@ -458,19 +488,68 @@ def grade(graph: G.Graph, pairs, gens, n: int) -> dict:
             "by_span": {str(sp): agg(recs) for sp, recs in sorted(by_span.items())}}
 
 
-def probe_paths(model, graph: G.Graph, pair_split: dict, args, device) -> dict:
-    out = {"mode": args.sft_mode, "tf": {}, "sample": {}}
+def missing_decodes(paths: dict, decodes) -> list:
+    """The (kind, value) settings an earlier probe's paths section has not sampled on both splits."""
+    return [d for d in decodes
+            if any(split not in paths.get("sample", {}).get(decode_key(*d), {}) for split in ("train", "heldout"))]
+
+
+def probe_paths(model, graph: G.Graph, pair_split: dict, args, device, done: dict = None) -> dict:
+    """done: an earlier probe.json's paths section (--update); it is kept as it is (teacher forcing included) and
+    only the sampling settings it lacks are added."""
+    out = done if done is not None else {"mode": args.sft_mode, "tf": {}, "sample": {}}
     for split in ("train", "heldout"):
         pairs = pick_pairs(pair_split[split], args.pairs, args.seed, split)
-        out["tf"][split] = probe_paths_tf(model, graph, pairs, args.sft_mode, args, device)
-        for temp in args.temps:
-            gens = sample_paths(model, graph, pairs, args.samples, temp, args.seed + 1000 * int(round(temp * 100)),
+        if done is None:
+            out["tf"][split] = probe_paths_tf(model, graph, pairs, args.sft_mode, args, device)
+        for kind, value in args.decodes:
+            if split in out["sample"].get(decode_key(kind, value), {}):
+                continue
+            gens = sample_paths(model, graph, pairs, args.samples, (kind, value), decode_seed(args.seed, kind, value),
                                 device, args.gen_batch)
-            out["sample"].setdefault(f"T{temp:g}", {})[split] = grade(graph, pairs, gens, args.samples)
+            out["sample"].setdefault(decode_key(kind, value), {})[split] = grade(graph, pairs, gens, args.samples)
     return out
 
 
 # ---- driver ---------------------------------------------------------------------------------------------
+def write_json(res: dict, path: str) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(res, f, indent=1)
+    os.replace(tmp, path)
+
+
+def update_probe(path: str, graph: G.Graph, data: dict, args) -> None:
+    """--update: sample the settings path/probe.json lacks and add them to it (same pairs, samples and seed)."""
+    out = os.path.join(path, args.out_name)
+    with open(out) as f:
+        res = json.load(f)
+    if "paths" not in res:
+        raise SystemExit(f"{out} has no paths section (probe it with --paths first)")
+    old = res.get("settings", {})
+    for k in ("pairs", "samples", "seed", "sft_mode"):
+        if old.get(k) != getattr(args, k):
+            raise SystemExit(f"{out} was probed with {k} = {old.get(k)!r}, not {getattr(args, k)!r}: "
+                             f"its samples would not be comparable")
+    todo = missing_decodes(res["paths"], args.decodes)
+    if not todo:
+        print(f"probe {path}: nothing to add", flush=True)
+        return
+    t0 = time.time()
+    model, _, _ = load_model(path, args.device)
+    res["paths"] = probe_paths(model, graph, data["pairs"], args, args.device, done=res["paths"])
+    keys = [decode_key(*d) for d in todo]
+    res.setdefault("updates", []).append({"added": keys, "seconds": round(time.time() - t0, 1),
+                                          "at": time.strftime("%Y-%m-%d %H:%M:%S")})
+    write_json(res, out)
+    msg = "  ".join(f"{k} {res['paths']['sample'][k]['heldout']['pass@1']:.3f}/"
+                    f"{res['paths']['sample'][k]['heldout']['distinct']:.2f}" for k in keys)
+    print(f"probe {path}: added heldout pass@1/distinct  {msg} ({time.time() - t0:.1f}s)", flush=True)
+    del model
+    if args.device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data", required=True, help="ladder/toy/make_data.py output (graph.json)")
@@ -488,15 +567,29 @@ def main(argv=None) -> None:
     p.add_argument("--tf-paths", type=int, default=4, help="teacher-forced paths per pair")
     p.add_argument("--samples", type=int, default=64, help="sampled completions per pair")
     p.add_argument("--temps", default="0.7,1.0,1.3", help="sampling temperatures")
+    p.add_argument("--map-ms", default="",
+                   help="also sample through the post-hoc margin map at these logit margins, comma-separated (pass "
+                        "it as --map-ms=-1.2,-3: a value starting with '-' would read as an option)")
+    p.add_argument("--update", action="store_true",
+                   help="with --paths: add to each model's existing probe.json the sampling settings (--temps, "
+                        "--map-ms) it lacks, keeping everything else; --pairs / --samples / --seed / --sft-mode "
+                        "must be the probe's")
     p.add_argument("--gen-batch", type=int, default=16384)
     args = p.parse_args(argv)
     args.temps = [float(x) for x in str(args.temps).split(",") if x]
+    args.map_ms = [float(x) for x in str(args.map_ms).split(",") if x]
+    args.decodes = [("T", t) for t in args.temps] + [("M", m) for m in args.map_ms]
+    if args.update and not args.paths:
+        p.error("--update adds path-task sampling settings: pass --paths")
 
     with open(os.path.join(args.data, "graph.json")) as f:
         data = json.load(f)
     graph = G.Graph.from_json(data["graph"])
     torch.backends.cuda.matmul.allow_tf32 = False
     for path in args.models:
+        if args.update:
+            update_probe(path, graph, data, args)
+            continue
         t0 = time.time()
         model, meta, head = load_model(path, args.device)
         res = {"probe_version": PROBE_VERSION, "model": os.path.abspath(path), "iteration": meta.get("iteration"),
@@ -508,10 +601,7 @@ def main(argv=None) -> None:
         if args.paths:
             res["paths"] = probe_paths(model, graph, data["pairs"], args, args.device)
         res["seconds"] = round(time.time() - t0, 1)
-        tmp = os.path.join(path, args.out_name + ".tmp")
-        with open(tmp, "w") as f:
-            json.dump(res, f, indent=1)
-        os.replace(tmp, os.path.join(path, args.out_name))
+        write_json(res, os.path.join(path, args.out_name))
         w = res.get("walk", {}).get("classes", {}).get("multi", {})
         msg = f"kl {w.get('kl', float('nan')):.4f} kl_theory {w.get('kl_theory', float('nan')):.4f} " \
               f"h_p/h_q {w.get('h_p', float('nan')):.3f}/{w.get('h_q', float('nan')):.3f}" if w else ""

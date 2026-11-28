@@ -340,6 +340,33 @@ def test_probe_metrics():
     assert probe.pass_at_k(4, 2, 2) == pytest.approx(1 - 1 / 6)
 
 
+def test_probe_decode_probs():
+    torch = pytest.importorskip("torch")
+    import probe
+
+    torch.manual_seed(0)
+    logits = torch.randn(5, 12) * 3
+    p = torch.softmax(logits.double(), -1)
+    assert torch.allclose(probe.decode_probs(logits, "T", 1.0).double(), p, atol=1e-6)
+    assert torch.allclose(probe.decode_probs(logits, "T", 2.0).double(), torch.softmax(logits.double() / 2, -1),
+                          atol=1e-6)
+    assert torch.allclose(probe.decode_probs(logits, "M", 0.0), p, atol=1e-12)
+    for m in (-3.0, -1.2, 1.2):
+        got = probe.decode_probs(logits, "M", m)
+        assert torch.allclose(got.sum(-1), torch.ones(5, dtype=torch.float64))
+        for row, prow in zip(got.tolist(), p.tolist()):
+            assert max(abs(a - b) for a, b in zip(row, T.margin_optimum(prow, m))) < 1e-9
+    # reverse: flatter at the top while a small probability is only rescaled (x1.83 here; temperature 1.4, which
+    # gives the same top, raises it x28)
+    q = torch.tensor([[x * (1 - 3e-4) for x in (0.5, 0.3, 0.2)] + [3e-4 / 95] * 95], dtype=torch.float64)
+    mp = probe.decode_probs(torch.log(q), "M", -1.2)[0]
+    assert float(mp[0]) == pytest.approx(0.44763, abs=1e-4) and float(mp[3] / q[0, 3]) == pytest.approx(1.8255, abs=1e-3)
+    with pytest.raises(ValueError):
+        probe.decode_probs(logits, "X", 1.0)
+    assert probe.decode_key("T", 1.0) == "T1" and probe.decode_key("M", -1.2) == "M-1.2"
+    assert probe.decode_seed(0, "T", 0.7) == 70000 and probe.decode_seed(0, "M", -1.2) != probe.decode_seed(0, "T", -1.2)
+
+
 def test_probe_end_to_end(tmp_path):
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
@@ -365,6 +392,25 @@ def test_probe_end_to_end(tmp_path):
     s = res["paths"]["sample"]["T1"]["heldout"]
     assert s["pairs"] == 8 and 0 <= s["pass@1"] <= 1 and abs(sum(s["fail"].values()) - 1) < 1e-9
     assert set(res["paths"]["tf"]["train"]["classes"]) == set(probe.PATH_CLASSES)
+    # --update: add a temperature and a margin-map setting, keep everything else
+    base = ["--data", str(tmp_path / "data"), "--models", str(model_dir), "--device", "cpu", "--paths",
+            "--samples", "8", "--update", "--temps", "1.0,2.0"]
+    probe.main(base + ["--pairs", "8", "--map-ms=-1.2"])
+    text = (model_dir / "probe.json").read_text()
+    new = json.loads(text)
+
+    def same(a, b):                                                          # NaN-safe
+        return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+    assert set(new["paths"]["sample"]) == {"T1", "T2", "M-1.2"} and new["updates"][0]["added"] == ["T2", "M-1.2"]
+    assert same(new["paths"]["sample"]["T1"], res["paths"]["sample"]["T1"]) and same(new["walk"], res["walk"])
+    assert same(new["paths"]["tf"], res["paths"]["tf"])
+    mm = new["paths"]["sample"]["M-1.2"]["heldout"]
+    assert mm["pairs"] == 8 and 0 <= mm["pass@1"] <= 1 and abs(sum(mm["fail"].values()) - 1) < 1e-9
+    probe.main(base + ["--pairs", "8", "--map-ms=-1.2"])                     # nothing to add: file untouched
+    assert (model_dir / "probe.json").read_text() == text
+    with pytest.raises(SystemExit):                                          # other pairs: not comparable
+        probe.main(base + ["--pairs", "4", "--map-ms=-3"])
 
 
 # ---- launchers (dry runs) -------------------------------------------------------------------------------
@@ -431,6 +477,23 @@ def test_chain_dry_run(tmp_path):
     cmds = [line for line in res.stdout.splitlines() if line.startswith("+ ")]
     assert len(cmds) == 2 and "ITER=1000" in cmds[0] and "ladder/toy/probe.py" in cmds[1]
     assert "main_iter500" in cmds[1] and "main_iter1000" not in cmds[1]
+    # decode: probe.py --update on the last probed, passed SFT export of each mode
+    sft_hf = tmp_path / "out" / "sft" / f"{run}_main_sft_toy_cond" / "hf"
+    for it in (122, 974):
+        (sft_hf / f"iter_{it}").mkdir(parents=True)
+        (sft_hf / f"iter_{it}" / "export_meta.json").write_text(json.dumps({"validation": {"passed": True}}))
+        (sft_hf / f"iter_{it}" / "probe.json").write_text("{}")
+    denv = {**env, "STAGES": "decode", "PYTHON": sys.executable}
+    res = bash("ladder/toy/chain.sh", denv)
+    assert res.returncode == 0, res.stderr
+    cmds = [line for line in res.stdout.splitlines() if line.startswith("+ ")]
+    assert len(cmds) == 1 and "--update" in cmds[0] and "--map-ms=-0.6,-1.2,-2,-3,-5" in cmds[0]
+    assert "--sft-mode cond" in cmds[0] and "iter_974" in cmds[0] and "iter_122" not in cmds[0]
+    assert "no probed SFT export" in res.stdout                               # canon has none yet
+    res = bash("ladder/toy/chain.sh", {**denv, "DECODE_ITERS": "all", "DECODE_ARGS": "--map-ms=-3"})
+    cmds = [line for line in res.stdout.splitlines() if line.startswith("+ ")]
+    assert "iter_122" in cmds[0] and "iter_974" in cmds[0] and "--map-ms=-3 " in cmds[0]
+    assert bash("ladder/toy/chain.sh", {**denv, "DECODE_ITERS": "first"}).returncode != 0
     assert bash("ladder/toy/chain.sh", {**env, "STAGES": "pretrain,bogus"}).returncode != 0
     assert bash("ladder/toy/chain.sh", {**env, "HEAD": "xfn"}).returncode != 0
 
@@ -465,6 +528,10 @@ def test_run_toy_dry_run(tmp_path):
     chains = [line.strip() for line in res.stdout.splitlines() if line.startswith("   CONFIG=")]
     assert len(chains) == 45 and len(set(chains)) == 45 and res.stdout.count("+ sbatch") == 3
     assert all(" LR=4e-3 " in c for c in chains)
+    res = bash("ladder/toy/run_toy.sh", {**env, "PHASE": "decode", "LR": "4e-3"})
+    assert res.returncode == 0, res.stderr
+    dec = [line.strip() for line in res.stdout.splitlines() if line.startswith("   CONFIG=")]
+    assert [c.replace(" STAGES=decode", "") for c in dec] == chains and res.stdout.count("+ sbatch") == 1
     assert not (tmp_path / "specs").exists(), "a dry run writes nothing"
 
 
@@ -482,7 +549,9 @@ def fake_probe(kl, pass1=None):
     if pass1 is not None:
         res["paths"] = {"mode": "cond", "tf": {},
                         "sample": {"T1": {"heldout": {"pass@1": pass1, "cover_count": 0.5}},
-                                   "T1.3": {"heldout": {"pass@1": pass1 / 2, "cover_count": 0.7}}}}
+                                   "T1.3": {"heldout": {"pass@1": pass1 / 2, "cover_count": 0.7}},
+                                   "M-1.2": {"heldout": {"pass@1": pass1, "cover_count": 0.9,
+                                                         "fail": {"ok": 0.8, "bad_edge": 0.2}}}}}
     return res
 
 
@@ -523,9 +592,13 @@ def test_summarize(tmp_path):
     hfn = {(r["decode"], r["value"]): r for r in dec if r["variant"] == "hfn_rev_d0.02"}
     assert set(hfn) == {("T", "1.0"), ("T", "2.0"), ("map_m", "1.0")}
     assert float(hfn["T", "2.0"]["kl"]) == pytest.approx(0.1) and hfn["T", "2.0"]["seeds"] == "2"
-    temps = {r["temp"]: r for r in csv.DictReader(open(report / "sft_temps_summary.csv"))}
-    assert float(temps["T1"]["heldout_pass@1"]) == pytest.approx(0.45)
-    assert float(temps["T1.3"]["heldout_pass@1"]) == pytest.approx(0.225)
+    rows = list(csv.DictReader(open(report / "sft_decode_summary.csv")))
+    assert [r["decode"] for r in rows] == ["T1", "T1.3", "M-1.2"]
+    dec = {r["decode"]: r for r in rows}
+    assert float(dec["T1"]["heldout_pass@1"]) == pytest.approx(0.45)
+    assert float(dec["T1.3"]["heldout_pass@1"]) == pytest.approx(0.225)
+    assert float(dec["M-1.2"]["heldout_fail_bad_edge"]) == pytest.approx(0.2)
+    assert float(dec["M-1.2"]["heldout_fail_no_eos"]) == 0.0
     order = sorted(["hfn_rev_d0.05", "plain", "sfn_d0.02", "hfn_d0.02", "hfn_rev_d0.02", "hfn_d0"],
                    key=summarize.variant_order)
     assert order == ["plain", "hfn_d0", "hfn_d0.02", "hfn_rev_d0.02", "hfn_rev_d0.05", "sfn_d0.02"]

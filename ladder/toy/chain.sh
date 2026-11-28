@@ -5,6 +5,9 @@
 #   probe     ladder/toy/probe.py on them: walk positions against the exact q, geometry, decoding sweeps
 #   sft       per SFT mode: ladder/sft/train_sft.sh (protocol A head) -> ladder/sft/export.sh (SFT_ITERS)
 #             -> probe.py --paths (path task: teacher-forced q and sampled pass@k / coverage)
+#   decode    per SFT mode: probe.py --paths --update on the probed SFT exports (DECODE_ITERS): adds the sampling
+#             settings of DECODE_ARGS (temperatures, the post-hoc margin map) to their probe.json. Not in the
+#             default STAGES; ladder/toy/run_toy.sh PHASE=decode runs it over the grid.
 # Each step skips what is done (a finished run, an existing export_meta.json / probe.json), so a rerun only does
 # what is missing. Normally started by ladder/toy/pack.sh, which sets CUDA_VISIBLE_DEVICES and MASTER_PORT.
 #
@@ -13,11 +16,13 @@
 #   HEAD MARGIN_D MARGIN_REVERSE HEAD_SCALE SFN_WEIGHT   LM head and margin, ladder/configs/head.sh (default plain)
 #   LR            peak LR (default: the config's), SEED (default 1: init and data order; same seed = same batches)
 #   CONFIG        default toy_l2;  OPT  default muon
-#   STAGES        comma- or space-separated subset of: pretrain export probe sft (default all four)
+#   STAGES        comma- or space-separated subset of: pretrain export probe sft decode (default the first four)
 #   SFT_MODES     default cond,canon (ladder/toy/make_data.py also writes uniform)
 #   PRE_ITERS     pretraining checkpoints to export + probe: all (default) | latest | "N N ..." (comma ok)
 #   SFT_ITERS     SFT checkpoints to export + probe: all (default) | latest | list
 #   PROBE_ARGS    extra probe.py arguments;  FORCE_PROBE=1 re-probes;  VENV;  PYTHON (default python)
+#   DECODE_ARGS   decode: the settings (default "--temps 0.7,1.0,1.3,1.6,2.0 --map-ms=-0.6,-1.2,-2,-3,-5")
+#   DECODE_ITERS  decode: latest (default: the last SFT export, as ladder/toy/summarize.py tables) | all
 #   DRY_RUN=1     print the commands (nothing exists yet, so no export / probe steps are listed)
 # Run directory: $TOY_ROOT/out/runs/<CONFIG>_<OPT>_lr<LR><HEAD_TAG>_seed<SEED>; SFT: $TOY_ROOT/out/sft/<run>_main_sft_toy_<mode>.
 set -euo pipefail
@@ -48,8 +53,13 @@ SFT_MODES=$(echo "${SFT_MODES:-cond canon}" | tr ',' ' ')
 PRE_ITERS=$(echo "${PRE_ITERS:-all}" | tr ',' ' ')
 SFT_ITERS=$(echo "${SFT_ITERS:-all}" | tr ',' ' ')
 for s in $STAGES; do
-    case "$s" in pretrain|export|probe|sft) ;; *) echo "unknown stage $s (pretrain export probe sft)" >&2; exit 1 ;; esac
+    case "$s" in
+    pretrain|export|probe|sft|decode) ;;
+    *) echo "unknown stage $s (pretrain export probe sft decode)" >&2; exit 1 ;;
+    esac
 done
+DECODE_ARGS=${DECODE_ARGS:---temps 0.7,1.0,1.3,1.6,2.0 --map-ms=-0.6,-1.2,-2,-3,-5}
+case "${DECODE_ITERS:-latest}" in latest|all) ;; *) echo "DECODE_ITERS must be latest or all" >&2; exit 1 ;; esac
 
 run() { echo "+ $*"; if [ "${DRY_RUN:-0}" != 1 ]; then "$@"; fi; }
 has() { [[ "$STAGES" == *" $1 "* ]]; }
@@ -112,6 +122,22 @@ if has sft; then
             run env TARGET=sft ITERS="${SFT_HF[*]##*iter_}" bash ladder/sft/export.sh
         fi
         probe_dirs --paths --sft-mode "$mode" -- ${SFT_HF[@]+"${SFT_HF[@]}"}
+    done
+fi
+if has decode; then
+    for mode in $SFT_MODES; do
+        SFT_HF_DIR=$OUT_ROOT/sft/${RUN}_main_sft_toy_$mode/hf
+        dirs=()
+        while read -r d; do
+            if [ -n "$d" ] && [ -f "$d/probe.json" ] && export_ok "$d"; then dirs+=("$d"); fi
+        done < <(for d in "$SFT_HF_DIR"/iter_*; do if [ -d "$d" ]; then echo "${d##*iter_} $d"; fi; done \
+                 | sort -n | cut -d' ' -f2- | { if [ "${DECODE_ITERS:-latest}" = latest ]; then tail -n 1; else cat; fi; })
+        if [ ${#dirs[@]} -eq 0 ]; then
+            echo "decode: no probed SFT export under $SFT_HF_DIR (the sft stage makes them)"; continue
+        fi
+        # shellcheck disable=SC2086
+        run $PY ladder/toy/probe.py --data "$DATA_DIR" --paths --sft-mode "$mode" --update $DECODE_ARGS \
+            ${PROBE_ARGS:-} --models "${dirs[@]}"
     done
 fi
 echo "== toy chain $RUN done"

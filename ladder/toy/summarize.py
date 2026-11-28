@@ -10,7 +10,9 @@ Also in report/:
   pretrain_iters.csv, sft_iters.csv   every probed checkpoint (pretraining every 500 iterations, SFT every epoch)
   pretrain_decode{,_summary}.csv      the last checkpoint decoded at temperature T and through the post-hoc margin
                                       map (decode = T | map_m): multi-position KL, H(p), junk, ... per value
-  sft_temps{,_summary}.csv            the last SFT checkpoint sampled at every temperature of the probe
+  sft_decode{,_summary}.csv           the last SFT checkpoint sampled at every decoding setting of its probe.json:
+                                      decode = T<temperature> | M<logit margin of the post-hoc margin map>
+                                      (ladder/toy/run_toy.sh PHASE=decode adds settings), with the failure rates
 """
 import argparse
 import csv
@@ -41,6 +43,9 @@ SFT_COLS = [
     ("tf_hop_kl", "tf hop KL"), ("tf_hop_h_p", "tf hop H(p)"), ("tf_hop_junk", "tf hop junk"),
 ]
 DECODE_COLS = [(k, k) for k in ("kl", "h_p", "junk", "supp_kl", "top1_p", "det_top1", "det_ce")]
+FAILS = ("bad_token", "empty", "bad_start", "bad_edge", "wrong_end", "no_eos")   # graph.py check_generation
+SFT_DECODE_COLS = SFT_COLS + [(f"{split}_{k}", f"{split}_{k}") for split in ("heldout", "train")
+                              for k in ("valid_rate", "pass@16", *(f"fail_{f}" for f in FAILS))]
 
 
 def variant_of(tag: str) -> str:
@@ -79,6 +84,8 @@ def path_row(res: dict, temp: str = "T1") -> dict:
         for k, v in rec.items():
             if isinstance(v, (int, float)):
                 row[f"{split}_{k}"] = v
+        for f in FAILS:                                    # the probe lists only the failures that occurred
+            row[f"{split}_fail_{f}"] = rec.get("fail", {}).get(f, 0.0)
     hop = pth.get("tf", {}).get("heldout", {}).get("classes", {}).get("hop_multi", {})
     row.update({"tf_hop_kl": hop.get("kl"), "tf_hop_h_p": hop.get("h_p"), "tf_hop_junk": hop.get("junk")})
     return row
@@ -202,6 +209,14 @@ def cmd_lr(args):
     print(f"lowest walk KL: LR={best['lr']}  ->  PHASE=grid LR={best['lr']} bash ladder/toy/run_toy.sh")
 
 
+def decode_order(key: str):
+    """T<temperature> by temperature, then M<margin> by margin."""
+    try:
+        return (0 if key[0] == "T" else 1, float(key[1:]))
+    except (ValueError, IndexError):
+        return (2, 0.0)
+
+
 def by_run(r):
     return (r["lr"], variant_order(r["variant"]), r.get("sft_mode", ""), r["seed"], r["iteration"])
 
@@ -223,15 +238,15 @@ def cmd_table(args):
     write_csv(os.path.join(report, "pretrain_decode_summary.csv"),
               sorted(group(dec, ["variant", "lr", "decode", "value"], DECODE_COLS),
                      key=lambda r: (r["lr"], variant_order(r["variant"]), r["decode"], r["value"])))
-    temps = []
+    sdec = []
     for r in sft:
         res = json.load(open(r["probe"]))
-        for t in (res.get("paths") or {}).get("sample", {}):
-            temps.append({**{k: r[k] for k in keys}, "sft_mode": r["sft_mode"], "temp": t, **path_row(res, t)})
-    write_csv(os.path.join(report, "sft_temps.csv"), temps)
-    write_csv(os.path.join(report, "sft_temps_summary.csv"),
-              sorted(group(temps, ["sft_mode", "variant", "lr", "temp"], SFT_COLS),
-                     key=lambda r: (r["sft_mode"], r["lr"], variant_order(r["variant"]), r["temp"])))
+        for d in (res.get("paths") or {}).get("sample", {}):
+            sdec.append({**{k: r[k] for k in keys}, "sft_mode": r["sft_mode"], "decode": d, **path_row(res, d)})
+    write_csv(os.path.join(report, "sft_decode.csv"), sdec)
+    write_csv(os.path.join(report, "sft_decode_summary.csv"),
+              sorted(group(sdec, ["sft_mode", "variant", "lr", "decode"], SFT_DECODE_COLS),
+                     key=lambda r: (r["sft_mode"], r["lr"], variant_order(r["variant"]), decode_order(r["decode"]))))
     g_pre = sorted(group(pre, ["variant", "lr"], PRE_COLS), key=lambda r: (r["lr"], variant_order(r["variant"])))
     print(f"== pretraining, last probed checkpoint ({len(pre)} runs)")
     print_table(g_pre, ["variant", "lr"], PRE_COLS)
