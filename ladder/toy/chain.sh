@@ -60,17 +60,25 @@ iters_of() {   # iters_of <checkpoint dir> <all | latest | list>
     *)      echo "$2" ;;
     esac
 }
-probe_dirs() {   # probe_dirs <probe.py args ...> -- <HF dirs ...>: probes those without probe.json
+export_ok() {   # export_ok <hf dir>: exported, and its Megatron vs HF logits check passed (or was skipped).
+    # A failed export_hf.py still writes export_meta.json (validation.passed false, or no "passed" from before the
+    # near-tie check): redo it, never probe it. Same rule as ladder/sft/export.sh.
+    [ -f "$1/export_meta.json" ] && $PY -c '
+import json, sys
+v = json.load(open(sys.argv[1])).get("validation")
+sys.exit(0 if v is None or v.get("passed") is True else 1)' "$1/export_meta.json"
+}
+probe_dirs() {   # probe_dirs <probe.py args ...> -- <HF dirs ...>: probes the good exports without probe.json
     local args=() dirs=() d
     while [ "$1" != -- ]; do args+=("$1"); shift; done
     shift
     for d in "$@"; do
         if [ -f "$d/probe.json" ] && [ "${FORCE_PROBE:-0}" != 1 ]; then continue; fi
-        if [ -f "$d/export_meta.json" ]; then dirs+=("$d"); fi
+        if export_ok "$d"; then dirs+=("$d"); fi
     done
     if [ ${#dirs[@]} -gt 0 ]; then
         # shellcheck disable=SC2086
-        run $PY ladder/toy/probe.py --data "$DATA_DIR" "${args[@]}" ${PROBE_ARGS:-} --models "${dirs[@]}"
+        run $PY ladder/toy/probe.py --data "$DATA_DIR" ${args[@]+"${args[@]}"} ${PROBE_ARGS:-} --models "${dirs[@]}"
     fi
 }
 
@@ -85,7 +93,7 @@ PRE_HF=()
 for it in $(iters_of "$PRE_CKPT" "$PRE_ITERS"); do PRE_HF+=("$RUN_DIR/hf/main_iter$it"); done
 if has export; then
     for out in ${PRE_HF[@]+"${PRE_HF[@]}"}; do
-        if [ -f "$out/export_meta.json" ]; then continue; fi
+        if export_ok "$out"; then continue; fi
         run env CKPT="$PRE_CKPT" ITER="${out##*_iter}" OUT="$out" bash ladder/export/export_hf.sh
     done
 fi

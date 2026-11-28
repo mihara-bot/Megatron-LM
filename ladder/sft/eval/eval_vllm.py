@@ -188,6 +188,39 @@ def grade_completion(task: EvalTask, problem: MathProblem, sample: int, text: st
             "finished": finish_reason == "stop", **graded, "text": text}
 
 
+HF_PACKAGES = ("transformers", "tokenizers")
+
+
+def local_hf_versions() -> Dict[str, Optional[str]]:
+    """transformers / tokenizers versions of this (the vLLM) environment; None for a missing package."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    out: Dict[str, Optional[str]] = {}
+    for pkg in HF_PACKAGES:
+        try:
+            out[pkg] = version(pkg)
+        except PackageNotFoundError:
+            out[pkg] = None
+    return out
+
+
+def compare_hf_versions(model_dir: str, local: Mapping[str, Optional[str]]
+                        ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """The export's transformers / tokenizers versions (export_meta.json, written in the Megatron environment that
+    also tokenized the SFT data) and how this environment's differ: (exported or None, ["pkg A (export) vs B (here)"]).
+    None when the model has no export_meta.json (a reference model) or an export predating the record."""
+    path = os.path.join(model_dir, "export_meta.json")
+    if not os.path.isfile(path):
+        return None, []
+    with open(path) as f:
+        exported = json.load(f).get("hf_versions")
+    if not exported:
+        return None, []
+    diff = [f"{pkg} {exported.get(pkg)} (export) vs {local.get(pkg)} (here)"
+            for pkg in HF_PACKAGES if exported.get(pkg) != local.get(pkg)]
+    return dict(exported), diff
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", required=True, help="exported HF model directory")
@@ -202,7 +235,22 @@ def main(argv=None) -> None:
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--allow-hf-version-mismatch", action="store_true",
+                        help="warn instead of failing when transformers / tokenizers differ from the export's")
     args = parser.parse_args(argv)
+
+    hf_versions = local_hf_versions()
+    export_hf_versions, hf_diff = compare_hf_versions(args.model, hf_versions)
+    if export_hf_versions is None:
+        print(f"[eval] {args.model}: no hf_versions in export_meta.json (reference model or older export); "
+              f"transformers / tokenizers here: {hf_versions}", flush=True)
+    elif hf_diff:
+        msg = ("transformers / tokenizers differ from the Megatron environment the model was exported in: "
+               + "; ".join(hf_diff) + ". Rebuild the vLLM environment with ladder/env/setup_vllm_env.sh (it pins "
+               "them to the Megatron environment's), or pass --allow-hf-version-mismatch (ALLOW_HF_MISMATCH=1)")
+        if not args.allow_hf_version_mismatch:
+            raise SystemExit(msg)
+        print(f"[eval] warning: {msg}", flush=True)
 
     cfg = load_config(args.config, args.data_root)
     tasks = [t for t in cfg["tasks"] if args.tasks is None or t.name in args.tasks]
@@ -259,7 +307,8 @@ def main(argv=None) -> None:
     import vllm
 
     summary = {"metrics": metrics, "model": os.path.abspath(args.model), "backend": "vllm",
-               "vllm_version": getattr(vllm, "__version__", "?"), "num_samples": num_samples, "greedy": greedy,
+               "vllm_version": getattr(vllm, "__version__", "?"), "hf_versions": hf_versions,
+               "export_hf_versions": export_hf_versions, "num_samples": num_samples, "greedy": greedy,
                "max_problems": max_problems, "temperature": cfg["temperature"], "top_p": cfg["top_p"],
                "seed": seed, "tasks": [t.name for t in tasks]}
     with open(os.path.join(args.output_dir, "summary.json"), "w") as f:

@@ -200,6 +200,20 @@ def test_eval_config_loads():
     assert cfg["tasks"][3].stop == ("\nProblem:",)
 
 
+def test_compare_hf_versions(tmp_path):
+    here = {"transformers": "5.9.0", "tokenizers": "0.22.2"}
+    assert eval_vllm.compare_hf_versions(str(tmp_path), here) == (None, [])           # reference model: no meta
+    meta = tmp_path / "export_meta.json"
+    meta.write_text(json.dumps({"iteration": 3}))
+    assert eval_vllm.compare_hf_versions(str(tmp_path), here) == (None, [])           # export predating the record
+    meta.write_text(json.dumps({"hf_versions": here}))
+    assert eval_vllm.compare_hf_versions(str(tmp_path), here) == (here, [])
+    exported, diff = eval_vllm.compare_hf_versions(str(tmp_path), {"transformers": "4.57.1", "tokenizers": None})
+    assert exported == here
+    assert diff == ["transformers 5.9.0 (export) vs 4.57.1 (here)", "tokenizers 0.22.2 (export) vs None (here)"]
+    assert set(eval_vllm.local_hf_versions()) == {"transformers", "tokenizers"}
+
+
 # ---- launchers (DRY_RUN) ---------------------------------------------------------------------------
 HEAD_VARS = ("HEAD", "MARGIN_D", "MARGIN_REVERSE", "HEAD_SCALE", "SFN_WEIGHT")
 
@@ -354,6 +368,8 @@ def test_eval_models(tmp_path):
     assert f"--model {sft}/hf/iter_1602 " in lines[1]
     out = run_script("ladder/sft/eval.sh", {"MODEL": f"{other}", "EVAL_DIR": tmp_path / "x"})
     assert out.stdout.splitlines()[-1].endswith(f"--output-dir {tmp_path}/x")
+    out = run_script("ladder/sft/eval.sh", {"MODEL": f"{other}", "ALLOW_HF_MISMATCH": "1"})
+    assert out.stdout.splitlines()[-1].endswith(" --allow-hf-version-mismatch")
     assert run_script("ladder/sft/eval.sh", {"MODEL": f"{sft}/hf/iter_*", "EVAL_DIR": "/x"}).returncode != 0
     full = {k: v for k, v in os.environ.items() if k not in ("MODEL", "DRY_RUN")}
     res = subprocess.run(["bash", "ladder/sft/eval.sh"], cwd=REPO, env={**full, "MODEL": "/nope"},

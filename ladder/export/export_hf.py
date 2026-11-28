@@ -14,6 +14,7 @@ Launch through ladder/export/export_hf.sh (one GPU, TP = PP = 1). Steps:
 The result loads in transformers / vLLM as a plain model, no remote code.
 """
 
+import importlib.metadata
 import json
 import math
 import os
@@ -107,7 +108,8 @@ def copy_tokenizer(src, out_dir, tokenizer) -> list:
     """Copy the tokenizer files training used, unchanged, into the export.
 
     tokenizer.save_pretrained would rewrite them in this environment's transformers format; transformers 5
-    writes tokenizer_class TokenizersBackend, which transformers 4.x (the vLLM eval environment) cannot load.
+    writes tokenizer_class TokenizersBackend, which transformers 4.x cannot load. The vLLM eval environment now has
+    this environment's transformers (ladder/env/setup_vllm_env.sh), but the copy keeps exports loadable anywhere.
     A hub id instead of a directory falls back to save_pretrained.
     """
     if not os.path.isdir(src):
@@ -226,6 +228,9 @@ def main():
         },
         "tokenizer_files": tokenizer_files,
         "tokenizer_source": args.tokenizer_model,
+        # ladder/sft/eval/eval_vllm.py compares these with the vLLM environment's (setup_vllm_env.sh pins them to
+        # this environment's), so SFT data, export and eval tokenize with the same library versions.
+        "hf_versions": {pkg: importlib.metadata.version(pkg) for pkg in ("transformers", "tokenizers")},
         "tokenizer_note": "ladder data is tokenized EOS-only (no BOS); the HF tokenizer may add BOS "
                           "by default. Evaluate every run with the same convention.",
     }

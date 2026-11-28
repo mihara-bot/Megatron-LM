@@ -110,15 +110,24 @@ distributions are the same.
 
 vLLM is not in the NGC image, and must not go into the Megatron environment (it brings its own torch, which
 would replace the image's torch that TransformerEngine is built against). `ladder/env/setup_vllm_env.sh` builds a
-separate venv (vLLM 0.11.0 by default: CUDA 12.8 wheels, NVIDIA driver >= 570; transformers < 5, pyarrow, pyyaml,
+separate venv (vLLM 0.28.0 by default: torch 2.13, CUDA 13.0 wheels, NVIDIA driver >= 580; pyarrow, pyyaml,
 sympy + antlr4-python3-runtime 4.11 for the MATH equivalence check) and records its versions in
 `requirements.lock`; `ladder/env/check_vllm_env.py --gpu --tokenizer <llama-3 tokenizer>` checks it on a GPU (the
 command is at the top of the setup script). eval.sh runs `VLLM_PYTHON` through `ladder/sft/eval/run_isolated.sh`,
 which drops the submitting shell's PYTHONPATH and the package directories of LD_LIBRARY_PATH, so the Megatron
 venv and the image's torch libraries cannot leak into the vLLM process.
 
+Only torch is separate: transformers and tokenizers are pinned to the Megatron venv's exact versions (5.9.0 /
+0.22.2 in the NGC 26.11 image), read when the setup script runs, so SFT data, export and eval tokenize with the
+same libraries. The vLLM version must accept that transformers: 0.19.1 - 0.28.0 do for 5.9.0, 0.29+ need >= 5.10.4.
+The export writes its versions to `export_meta.json` (`hf_versions`); `eval_vllm.py` stops on a mismatch
+(`ALLOW_HF_MISMATCH=1` only warns) and records both in `summary.json`. Models without the record (reference
+models, older exports) are evaluated with a note.
+
 ```bash
-VLLM_VENV=/fast/users/zhuangxinlin/envs/vllm bash ladder/env/setup_vllm_env.sh   # once, no GPU needed
+source <MEGATRON_VENV>/bin/activate   # once, no GPU needed; pins come from this venv
+UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple \
+  VLLM_VENV=/fast/users/zhuangxinlin/envs/vllm bash ladder/env/setup_vllm_env.sh
 ```
 
 ## Tests

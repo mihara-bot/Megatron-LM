@@ -18,6 +18,8 @@
 #   VLLM_PYTHON  python of the vLLM environment (default: python); ladder/env/setup_vllm_env.sh builds one. It runs
 #                through ladder/sft/eval/run_isolated.sh, without the submitting shell's PYTHONPATH / package libraries
 #   TASKS, NUM_SAMPLES, MAX_PROBLEMS   override math_passk.yaml
+#   ALLOW_HF_MISMATCH=1   warn instead of failing when the vLLM environment's transformers / tokenizers differ from
+#                the versions in the model's export_meta.json (the Megatron environment's)
 #   FORCE=1      re-evaluate a model whose summary.json exists; DRY_RUN=1 print the commands only
 # Output: <eval dir>/{summary.json,<task>.jsonl}, and one line per model in <eval dir>/../summary.jsonl.
 set -euo pipefail
@@ -36,6 +38,7 @@ if [ -n "${TASKS:-}" ]; then
 fi
 if [ -n "${NUM_SAMPLES:-}" ]; then EVAL_ARGS+=(--num-samples "$NUM_SAMPLES"); SUFFIX+="_n${NUM_SAMPLES}"; fi
 if [ -n "${MAX_PROBLEMS:-}" ]; then EVAL_ARGS+=(--max-problems "$MAX_PROBLEMS"); SUFFIX+="_p${MAX_PROBLEMS}"; fi
+if [ "${ALLOW_HF_MISMATCH:-0}" = 1 ]; then EVAL_ARGS+=(--allow-hf-version-mismatch); fi
 
 # Expand globs now (inside the job), drop the trailing slash, order iterations numerically.
 MODELS=()

@@ -419,6 +419,17 @@ def test_chain_dry_run(tmp_path):
     assert res.returncode == 0, res.stderr
     cmds = [line for line in res.stdout.splitlines() if line.startswith("+ ")]
     assert len(cmds) == 2 and "ITER=500" in cmds[0] and f"OUT={ck.parent.parent}/hf/main_iter1000" in cmds[1]
+    # export_hf.py writes export_meta.json even when its logits check fails: such an export (passed false, or no
+    # "passed" from before the near-tie check) is redone and never probed; a passed one is kept and probed
+    hf = ck.parent.parent / "hf"
+    for it, val in ((500, {"passed": True}), (1000, {"top1_agreement": 0.9785})):
+        (hf / f"main_iter{it}").mkdir(parents=True)
+        (hf / f"main_iter{it}" / "export_meta.json").write_text(json.dumps({"validation": val}))
+    res = bash("ladder/toy/chain.sh", {**env, "STAGES": "export,probe", "PRE_ITERS": "all", "PYTHON": sys.executable})
+    assert res.returncode == 0, res.stderr
+    cmds = [line for line in res.stdout.splitlines() if line.startswith("+ ")]
+    assert len(cmds) == 2 and "ITER=1000" in cmds[0] and "ladder/toy/probe.py" in cmds[1]
+    assert "main_iter500" in cmds[1] and "main_iter1000" not in cmds[1]
     assert bash("ladder/toy/chain.sh", {**env, "STAGES": "pretrain,bogus"}).returncode != 0
     assert bash("ladder/toy/chain.sh", {**env, "HEAD": "xfn"}).returncode != 0
 
