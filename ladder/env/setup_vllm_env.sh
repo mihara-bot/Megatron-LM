@@ -30,6 +30,7 @@
 set -euo pipefail
 
 : "${VLLM_VENV:?set VLLM_VENV, e.g. /fast/users/zhuangxinlin/envs/vllm}"
+case "$VLLM_VENV" in /*) ;; *) VLLM_VENV=$PWD/$VLLM_VENV ;; esac   # uv runs from another directory below
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 if [ -e "$VLLM_VENV" ]; then echo "$VLLM_VENV exists; remove it first or pick another VLLM_VENV" >&2; exit 1; fi
 if ! command -v uv >/dev/null; then echo "uv not found (ladder/env/setup_env.sh needs it too)" >&2; exit 1; fi
@@ -54,12 +55,23 @@ echo "== vLLM $VLLM_VERSION, $TRANSFORMERS -> $VLLM_VENV (base interpreter $BASE
 # Nothing of the Megatron environment or the image may steer the install: NGC images pin their own torch
 # through PIP_CONSTRAINT, and an active VIRTUAL_ENV is where `uv pip` would install otherwise.
 unset PIP_CONSTRAINT UV_CONSTRAINT PYTHONPATH VIRTUAL_ENV
+# uv also reads [tool.uv] from the pyproject.toml of the directory it runs in, and Megatron's overrides torch,
+# torchvision and triton away (`sys_platform == 'never'`: in the Megatron env they come from the image). Run uv
+# from an empty directory instead; user-level config (~/.config/uv/uv.toml, e.g. a mirror) and UV_* still apply.
+NEUTRAL=$(mktemp -d)
+trap 'rm -rf "$NEUTRAL"' EXIT
+uvn() { (cd "$NEUTRAL" && uv "$@"); }
 
-uv venv --python "$BASE_PYTHON" "$VLLM_VENV"          # no --system-site-packages: nothing from the image
+uvn venv --python "$BASE_PYTHON" "$VLLM_VENV"         # no --system-site-packages: nothing from the image
 PY=$VLLM_VENV/bin/python
-uv pip install --python "$PY" "vllm==$VLLM_VERSION" "$TRANSFORMERS" pyyaml pyarrow sympy \
+uvn pip install --python "$PY" "vllm==$VLLM_VERSION" "$TRANSFORMERS" pyyaml pyarrow sympy \
     "antlr4-python3-runtime==4.11.*"                  # sympy's LaTeX parser is generated with ANTLR 4.11
-uv pip freeze --python "$PY" > "$VLLM_VENV/requirements.lock"
+uvn pip freeze --python "$PY" > "$VLLM_VENV/requirements.lock"
+for pkg in torch triton vllm; do
+    if ! grep -qi "^${pkg}==" "$VLLM_VENV/requirements.lock"; then
+        echo "$pkg is missing from $VLLM_VENV (a uv config overriding it away?): see requirements.lock" >&2; exit 1
+    fi
+done
 
 bash ladder/sft/eval/run_isolated.sh "$PY" ladder/env/check_vllm_env.py
 echo "VLLM_PYTHON=$PY   (GPU check: see the top of ladder/env/setup_vllm_env.sh)"

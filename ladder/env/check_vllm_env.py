@@ -42,13 +42,19 @@ def own_modules():
     cfg = open(os.path.join(sys.prefix, "pyvenv.cfg")).read().replace(" ", "").lower()
     if "include-system-site-packages=true" in cfg:
         raise RuntimeError("the venv sees the system site-packages (built with --system-site-packages)")
-    out, bad = [], []
-    for mod in ["torch", "vllm", "transformers", "sympy", "yaml", "pyarrow"]:
-        m = importlib.import_module(mod)
+    out, bad, missing = [], [], []
+    for mod in ["torch", "triton", "vllm", "transformers", "sympy", "yaml", "pyarrow"]:
+        try:
+            m = importlib.import_module(mod)
+        except ImportError as e:
+            missing.append(f"{mod} ({e})")
+            continue
         path = os.path.realpath(m.__file__)
         if not path.startswith(os.path.realpath(sys.prefix) + os.sep):
             bad.append(f"{mod} from {path}")
         out.append(f"{mod} {getattr(m, '__version__', '?')}")
+    if missing:
+        raise RuntimeError("cannot import: " + "; ".join(missing) + (f" (found: {', '.join(out)})" if out else ""))
     if bad:
         raise RuntimeError("imported from outside the venv (PYTHONPATH leak?): " + "; ".join(bad))
     import torch
