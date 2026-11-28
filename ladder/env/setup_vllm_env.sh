@@ -23,6 +23,10 @@
 #   sbatch -J vllm-check -A polaris -p polaris -N 1 --ntasks-per-node=1 --gpus-per-node=1 --cpus-per-task=16 \
 #     --mem=128G -t 00:30:00 -o logs/%x-%j.out --wrap "srun --ntasks=1 ht-run bash ladder/sft/eval/run_isolated.sh \
 #     $VLLM_VENV/bin/python ladder/env/check_vllm_env.py --gpu --tokenizer /fast/users/zhuangxinlin/tokenizers/llama-3"
+# lm-eval for the pretraining eval (ladder/eval/lm_eval.sh) goes into this venv too, from the lm-evaluation-harness
+# clone next to Megatron-LM, editable, constrained to the lock so transformers / tokenizers / torch stay where they are:
+#   cd ../lm-evaluation-harness && $VLLM_VENV/bin/python -m pip install -e . -c $VLLM_VENV/requirements.lock
+#   bash ladder/sft/eval/run_isolated.sh $VLLM_VENV/bin/python ladder/env/check_vllm_env.py --lm-eval
 #
 # Variables:
 #   VLLM_VENV        target directory on storage every node reads (required; must not exist)
@@ -83,7 +87,9 @@ NEUTRAL=$(mktemp -d)
 trap 'rm -rf "$NEUTRAL"' EXIT
 uvn() { (cd "$NEUTRAL" && uv "$@"); }
 
-uvn venv --python "$BASE_PYTHON" "$VLLM_VENV"         # no --system-site-packages: nothing from the image
+# No --system-site-packages: nothing from the image. --seed puts pip into the venv, so `<VLLM_VENV>/bin/python -m pip`
+# installs lm-eval there (ladder/EVAL.md); without it, a bare `pip` could resolve to the Megatron venv's.
+uvn venv --seed --python "$BASE_PYTHON" "$VLLM_VENV"
 PY=$VLLM_VENV/bin/python
 if ! uvn pip install --python "$PY" "vllm==$VLLM_VERSION" "$TRANSFORMERS" "$TOKENIZERS" pyyaml pyarrow sympy \
         "antlr4-python3-runtime==4.11.*"; then        # sympy's LaTeX parser is generated with ANTLR 4.11

@@ -7,8 +7,10 @@ Always: versions; torch / vllm / transformers / sympy imported from this environ
 the Megatron venv); sympy's LaTeX parser works (without it the MATH grader silently falls back to string
 matching, visible only as sympy_equivalence = 0 in summary.json); eval_vllm.py and math_passk.yaml load.
 --gpu: CUDA, a bf16 matmul, and with --tokenizer (a tiny random Llama built with that tokenizer) or --model a
-short vLLM generation with eval_vllm.py's engine settings, greedy and sampled. Last line: "vLLM env OK" or the
-failures; exit status 1 on failure.
+short vLLM generation with eval_vllm.py's engine settings, greedy and sampled.
+--lm-eval: lm-eval (ladder/eval/lm_eval.sh) is installed in this venv (an editable install points at the clone), its
+vLLM backend imports, and transformers / tokenizers are still the versions the setup pinned (requirements.lock).
+Last line: "vLLM env OK" or the failures; exit status 1 on failure.
 """
 
 import argparse
@@ -79,6 +81,28 @@ def eval_config():
 
     cfg = eval_vllm.load_config(os.path.join(REPO, "ladder/sft/eval/math_passk.yaml"), "/data")
     return f"{len(cfg['tasks'])} tasks in math_passk.yaml"
+
+
+def lm_eval_pkg():
+    """lm_eval from this venv's site-packages (editable: the clone), its vLLM backend, pins unchanged."""
+    import importlib.util
+
+    if importlib.util.find_spec("lm_eval") is None:
+        raise RuntimeError(f"lm_eval not installed: cd ../lm-evaluation-harness && {sys.executable} -m pip install -e . "
+                           f"-c {os.path.join(sys.prefix, 'requirements.lock')}")
+    importlib.import_module("lm_eval.models.vllm_causallms")
+    lock = os.path.join(sys.prefix, "requirements.lock")
+    moved = []
+    if os.path.isfile(lock):
+        pins = dict(line.strip().lower().split("==", 1) for line in open(lock) if "==" in line)
+        for pkg in ("transformers", "tokenizers", "torch", "vllm"):
+            if pkg in pins and version(pkg) != pins[pkg]:
+                moved.append(f"{pkg} {pins[pkg]} -> {version(pkg)}")
+    if moved:
+        raise RuntimeError("installing lm-eval moved pinned packages (reinstall with -c requirements.lock): "
+                           + "; ".join(moved))
+    spec = importlib.util.find_spec("lm_eval")
+    return f"lm_eval {version('lm_eval')} from {os.path.dirname(os.path.dirname(spec.origin))}, vllm backend imports"
 
 
 def gpu():
@@ -155,6 +179,7 @@ def generate(model_dir):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--gpu", action="store_true")
+    p.add_argument("--lm-eval", action="store_true", help="also check lm-eval (ladder/eval/lm_eval.sh)")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--tokenizer", help="build a tiny random Llama with this HF tokenizer and generate with it")
     g.add_argument("--model", help="an HF model directory to generate with (e.g. an export of ladder/sft/export.sh)")
@@ -167,6 +192,8 @@ def main():
     check("packages from this venv", own_modules)
     check("sympy LaTeX parser (MATH equivalence)", sympy_latex)
     check("eval_vllm.py + math_passk.yaml", eval_config)
+    if args.lm_eval:
+        check("lm-eval", lm_eval_pkg)
     if args.gpu:
         check("CUDA", gpu)
         if args.model:
