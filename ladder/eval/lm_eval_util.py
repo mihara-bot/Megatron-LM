@@ -2,7 +2,7 @@
 
     python3 ladder/eval/lm_eval_util.py model-args <model dir> [--tokens auto|eos|default]   -> "<convention> [<args>]"
     <vllm python> ladder/eval/lm_eval_util.py preflight <model dir> [--allow-hf-version-mismatch]
-    python3 ladder/eval/lm_eval_util.py collect --model <dir> --out <eval dir> --tasks a,b [--summary <jsonl>] ...
+    python3 ladder/eval/lm_eval_util.py collect --model <dir> --out <eval dir> --tasks a,b [--summary <jsonl>]... ...
 
 model-args: the token convention, as extra lm-eval --model_args. Ladder pretraining data is tokenized EOS-only
 (text + EOS, no BOS; ladder/data/tokenize_dataset.py) and SFT data the same way, so with "eos" lm-eval adds no BOS
@@ -16,8 +16,8 @@ preflight: lm_eval and vllm are installed in this interpreter's environment, and
 are the versions of the Megatron environment the model was exported in (export_meta.json hf_versions;
 ladder/env/setup_vllm_env.sh pins them, and a later `pip install -e` of lm-eval could move them).
 
-collect: the newest results_<date>.json lm-eval wrote in <eval dir> -> <eval dir>/results.json, and one line in
---summary (default <eval dir>/../summary.jsonl): model, run / tag / iteration (ladder exports), LM head, settings,
+collect: the newest results_<date>.json lm-eval wrote in <eval dir> -> <eval dir>/results.json, and one line in each
+--summary file (repeatable; default <eval dir>/../summary.jsonl): model, run / tag / iteration (ladder exports), LM head, settings,
 every metric as "<task>/<metric>" (the ",none" filter suffix dropped), "score/<task>" for each requested task
 (acc_norm, else acc, else exact_match, else the first metric) and "avg_score": the mean of the requested tasks'
 scores that are accuracies.
@@ -152,7 +152,8 @@ def name_tag_iter(model_dir: str) -> Tuple[Optional[str], Optional[str], Optiona
     return run, m.group(1), int(m.group(2))
 
 
-def collect(model_dir: str, out_dir: str, tasks: List[str], summary: Optional[str], extra: Dict[str, Any]) -> Dict:
+def collect(model_dir: str, out_dir: str, tasks: List[str], summaries: Optional[List[str]],
+            extra: Dict[str, Any]) -> Dict:
     files = sorted(glob.glob(os.path.join(out_dir, "results_*.json")))
     if not files:
         raise SystemExit(f"no results_*.json in {out_dir} (lm-eval failed?)")
@@ -199,9 +200,16 @@ def collect(model_dir: str, out_dir: str, tasks: List[str], summary: Optional[st
     if missing:
         row["missing_tasks"] = missing
         print(f"[lm_eval] warning: no metric for {missing} in {files[-1]}", file=sys.stderr)
-    dest = summary or os.path.join(os.path.dirname(os.path.abspath(out_dir)), "summary.jsonl")
-    with open(dest, "a") as f:
-        f.write(json.dumps(row) + "\n")
+    dests = summaries or [os.path.join(os.path.dirname(os.path.abspath(out_dir)), "summary.jsonl")]
+    seen = set()
+    for dest in dests:
+        key = os.path.realpath(dest)
+        if key in seen:
+            continue
+        seen.add(key)
+        os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+        with open(dest, "a") as f:
+            f.write(json.dumps(row) + "\n")
     return row
 
 
@@ -218,7 +226,7 @@ def main(argv=None) -> None:
     c.add_argument("--model", required=True)
     c.add_argument("--out", required=True)
     c.add_argument("--tasks", required=True, help="comma-separated, as given to lm-eval")
-    c.add_argument("--summary", default=None)
+    c.add_argument("--summary", action="append", default=None, help="summary.jsonl to append to (repeatable)")
     c.add_argument("--task-set", default=None)
     c.add_argument("--num-fewshot", default=None)
     c.add_argument("--limit", default=None)

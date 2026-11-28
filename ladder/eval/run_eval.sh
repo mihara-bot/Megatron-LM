@@ -2,8 +2,8 @@
 # HF export + lm-eval (vLLM) of pretraining runs (ladder/EVAL.md). Per run, two 1-GPU jobs, afterok between them:
 #   export  Megatron env: ladder/eval/export.sh -> <run>/hf/<tag>_iter<N> for each checkpoint directory whose run
 #           has finished its decay (main at TPP_MAX, tpp20, tpp50, ...; unfinished ones are skipped)
-#   eval    vLLM env: ladder/eval/lm_eval.sh on every export of the run -> <run>/lm_eval/<tag>_iter<N>/results.json,
-#           one line per model in <run>/lm_eval/summary.jsonl
+#   eval    vLLM env: ladder/eval/lm_eval.sh on every export of the run -> logs/pretrain_evals/<run>/<tag>_iter<N>/
+#           results.json, one line per model in logs/pretrain_evals/<run>/summary.jsonl and logs/pretrain_evals/summary.jsonl
 # Run from the Megatron-LM root with the Megatron uv environment active: `bash ladder/eval/run_eval.sh` submits every
 # chain at the bottom of the rungs in RUNGS (default both), e.g. `RUNGS=r1 bash ladder/eval/run_eval.sh`; CHAINS picks
 # chains by name, e.g. `CHAINS="r1-plain r1-hfn-d0.02" bash ladder/eval/run_eval.sh`. IDLE: which steps run on idle

@@ -26,10 +26,11 @@
 #                ladder export (it has export_meta.json), lm-eval's default for other models
 #   EVAL_DATA_DIR  datasets of ladder/eval/download_datasets.sh (default /fast/users/zhuangxinlin/data/lm_eval_hf);
 #                when it exists, lm-eval runs from it with the Hub offline, else it reads the Hub (HF_ENDPOINT)
-#   EVAL_DIR     output directory, for a single MODEL. Default: <X>/lm_eval/<name> for a model at <X>/hf/<name>
-#                (the layout of the export scripts), else <parent>/lm_eval/<name>; plus a suffix when TASK_SET /
-#                TASKS / NUM_FEWSHOT / LIMIT / TOKENS differ from the defaults, so a subset never overwrites the
-#                full results
+#   EVAL_ROOT    where results go (default <Megatron-LM>/logs/pretrain_evals): <EVAL_ROOT>/<run>/<name> for a model at
+#                <run dir>/hf/<name> (the layout of the export scripts), else <EVAL_ROOT>/<parent dir name>/<name>; plus a
+#                suffix when TASK_SET / TASKS / NUM_FEWSHOT / LIMIT / TOKENS differ from the defaults, so a subset never
+#                overwrites the full results
+#   EVAL_DIR     output directory, for a single MODEL (overrides the layout above)
 #   VLLM_PYTHON  python of the vLLM environment (default: python); it runs through ladder/sft/eval/run_isolated.sh,
 #                without the submitting shell's PYTHONPATH / package libraries
 #   BATCH_SIZE (auto), GPU_MEM (gpu_memory_utilization, 0.85), SEED (1234, vLLM's seed),
@@ -38,8 +39,9 @@
 #                the versions in the model's export_meta.json
 #   FORCE=1      re-evaluate a model whose results.json exists; DRY_RUN=1 print the commands only
 # Output: <eval dir>/results_<date>.json (lm-eval), results.json (copy of the latest), lm_eval_<stamp>.log,
-# samples_*.jsonl (LOG_SAMPLES=1); one line per model in <eval dir>/../summary.jsonl ("score/<task>",
-# "avg_score", every "<task>/<metric>", run / tag / iteration / LM head; ladder/eval/lm_eval_util.py collect).
+# samples_*.jsonl (LOG_SAMPLES=1); one line per model in <eval dir>/../summary.jsonl (per run) and in
+# <EVAL_ROOT>/summary.jsonl (every run): "score/<task>", "avg_score", every "<task>/<metric>", run / tag / iteration /
+# LM head (ladder/eval/lm_eval_util.py collect).
 # A model that fails does not stop the others; the script then exits 1.
 set -euo pipefail
 
@@ -48,6 +50,8 @@ cd "$REPO"
 : "${MODEL:?set MODEL to one or more Hugging Face model directories (ladder/eval/export.sh writes them)}"
 VLLM_PYTHON=${VLLM_PYTHON:-python}
 EVAL_DATA_DIR=${EVAL_DATA_DIR:-/fast/users/zhuangxinlin/data/lm_eval_hf}
+EVAL_ROOT=${EVAL_ROOT:-$REPO/logs/pretrain_evals}
+case "$EVAL_ROOT" in /*) ;; *) EVAL_ROOT=$REPO/$EVAL_ROOT ;; esac
 TASK_SET=${TASK_SET:-small}
 TOKENS=${TOKENS:-auto}
 BATCH_SIZE=${BATCH_SIZE:-auto}
@@ -123,14 +127,11 @@ if [ -n "${EVAL_DIR:-}" ]; then
     case "$EVAL_DIR" in /*) ;; *) EVAL_DIR=$REPO/$EVAL_DIR ;; esac
 fi
 
-eval_dir() {   # default output directory of a model directory
-    local m=$1 parent name
+eval_dir() {   # default output directory of a model directory: <EVAL_ROOT>/<run>/<name><suffix>
+    local m=$1 parent name group
     parent=$(dirname "$m"); name=$(basename "$m")
-    if [ "$(basename "$parent")" = hf ]; then
-        echo "$(dirname "$parent")/lm_eval/${name}${SUFFIX}"
-    else
-        echo "$parent/lm_eval/${name}${SUFFIX}"
-    fi
+    if [ "$(basename "$parent")" = hf ]; then group=$(basename "$(dirname "$parent")"); else group=$(basename "$parent"); fi
+    echo "$EVAL_ROOT/$group/${name}${SUFFIX}"
 }
 export_failed() {   # export_failed <model dir>: its export_meta.json records a failed Megatron vs HF logits check
     [ -f "$1/export_meta.json" ] && python3 -c '
@@ -148,6 +149,7 @@ else
     echo "== datasets: ${HF_ENDPOINT:-https://huggingface.co} (no $EVAL_DATA_DIR; ladder/eval/download_datasets.sh)"
 fi
 echo "== tasks ($TASK_SET_NAME): $TASKS"
+echo "== results: ${EVAL_DIR:-$EVAL_ROOT/<run>/<name>$SUFFIX}"
 
 FAILED=()
 STAMP=$(date +%Y%m%d-%H%M%S)
@@ -185,6 +187,7 @@ for m in ${MODELS[@]+"${MODELS[@]}"}; do
         FAILED+=("$m"); continue
     fi
     if ! python3 ladder/eval/lm_eval_util.py collect --model "$m" --out "$out" --tasks "$TASKS" \
+            --summary "$(dirname "$out")/summary.jsonl" --summary "$EVAL_ROOT/summary.jsonl" \
             --task-set "$TASK_SET_NAME" --num-fewshot "${NUM_FEWSHOT:-}" --limit "${LIMIT:-}" --tokens "$CONVENTION"; then
         FAILED+=("$m")
     fi

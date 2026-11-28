@@ -9,7 +9,7 @@ export runs in the Megatron environment, the eval in the vLLM one.
 | datasets (once) | `ladder/eval/download_datasets.sh` | any python3 | 0 | `$EVAL_DATA_DIR/<org>/<name>` |
 | lm-eval install (once) | `pip install -e` (below) | vLLM | 0 | lm_eval in the vLLM venv |
 | export | `ladder/eval/export.sh` | Megatron | 1 | `<run>/hf/<tag>_iter<N>` |
-| eval | `ladder/eval/lm_eval.sh` | vLLM | 1 | `<run>/lm_eval/<tag>_iter<N>/results.json`, `<run>/lm_eval/summary.jsonl` |
+| eval | `ladder/eval/lm_eval.sh` | vLLM | 1 | `logs/pretrain_evals/<run>/<tag>_iter<N>/results.json`, `summary.jsonl` |
 | both, per run | `ladder/eval/run_eval.sh` | (submits) | | export job, then eval job with afterok |
 
 ## 1. Once per cluster
@@ -91,10 +91,12 @@ The EOS id comes from the export's `config.json`. The Qwen3 base tokenizer has n
 Other models (official checkpoints, as references) keep lm-eval's defaults. `TOKENS=eos` or `TOKENS=default`
 forces one convention, and the results then go to their own directory.
 
-**Outputs.** For a model at `<X>/hf/<name>`:
+**Outputs.** Results go to `logs/pretrain_evals` in the Megatron-LM checkout (`EVAL_ROOT` overrides it), not next to
+the checkpoints. For a model at `<run dir>/hf/<name>`:
 
-- `<X>/lm_eval/<name>/results.json`, which is lm-eval's `results_<date>.json`, plus the log.
-- One line in `<X>/lm_eval/summary.jsonl` with:
+- `logs/pretrain_evals/<run>/<name>/results.json`, which is lm-eval's `results_<date>.json`, plus the log.
+- One line in `logs/pretrain_evals/<run>/summary.jsonl` (this run) and in `logs/pretrain_evals/summary.jsonl` (every
+  run, for comparisons across runs) with:
   - run, tag and iteration, LM head and margin;
   - `score/<task>` (acc_norm, else acc);
   - `avg_score` over the requested tasks;

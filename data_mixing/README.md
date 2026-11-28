@@ -71,12 +71,12 @@ exists. `verify` writes `_DONE` last, and `build` or a failed `verify` deletes i
 ### 3. Polaris: tokenize, one job per family
 
 ```bash
-cd Megatron-LM   # Megatron environment
-sbatch --partition=polaris --account=polaris --job-name=tok-llama3 --nodes=1 --ntasks=1 \
-    --cpus-per-task=128 --mem=512G --time=24:00:00 --chdir="$PWD" --export=ALL,FAMILY=llama3 \
-    --output="tok-llama3-%j.out" \
-    --wrap='srun --ntasks=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" ht-run bash -e data_mixing/tokenize_polaris.sh all'
-# same with FAMILY=qwen3; later FAMILY=deepseek TOK=/path/to/its/base/tokenizer
+cd Megatron-LM                                    # Megatron environment activated; sbatch exports it
+mkdir -p /fast/users/$USER/runs                   # SLURM logs: /fast/users/<user>/runs/<job name>-<jobid>.out
+FAMILY=llama3 sbatch data_mixing/test_polaris.sbatch                            # first time: tests (1 GPU)
+FAMILY=llama3 sbatch --job-name=tok-llama3 data_mixing/tokenize_polaris.sbatch  # verify..report, 128 CPUs
+FAMILY=qwen3  sbatch --job-name=tok-qwen3  data_mixing/tokenize_polaris.sbatch  # in parallel
+# later: FAMILY=deepseek TOK=/path/to/its/base/tokenizer sbatch --job-name=tok-deepseek ...
 FAMILY=llama3 bash data_mixing/tokenize_polaris.sh cleanup   # after report.json says "ok": true
 ```
 
@@ -160,6 +160,6 @@ python data_mixing/tests/test_parquet_e2e.py    # pyarrow + numpy: plan/build/ve
 DM_TOKENIZER=/path/to/tokenizer python data_mixing/tests/test_parquet_e2e.py   # + ladder/data tokenize/merge + report
 ```
 
-On Polaris, `FAMILY=llama3 bash data_mixing/tokenize_polaris.sh test` runs all of them, including the real
-tokenize, in the Megatron environment. The sbatch line (1 GPU) is at the top of that script. All of them
-also run under pytest (`-p no:cacheprovider -o addopts=""`).
+On Polaris, `FAMILY=llama3 sbatch data_mixing/test_polaris.sbatch` runs all of them in the Megatron
+environment, including the real tokenize; the log ends with `all data_mixing tests passed`. All of them also
+run under pytest (`-p no:cacheprovider -o addopts=""`).

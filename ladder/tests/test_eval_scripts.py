@@ -21,7 +21,7 @@ import lm_eval_util as util  # noqa: E402
 
 SCRUB = ("HEAD", "MARGIN_D", "MARGIN_REVERSE", "HEAD_SCALE", "SFN_WEIGHT", "CONFIG", "OPT", "LR", "RUN", "TAGS", "ITERS",
          "TOKENIZER", "OUT_ROOT", "FORCE", "ALLOW_UNFINISHED", "MODEL", "TASK_SET", "TASKS", "NUM_FEWSHOT", "LIMIT",
-         "TOKENS", "EVAL_DIR", "EVAL_DATA_DIR", "VLLM_PYTHON", "LOG_SAMPLES", "MODEL_ARGS", "ALLOW_HF_MISMATCH",
+         "TOKENS", "EVAL_DIR", "EVAL_ROOT", "EVAL_DATA_DIR", "VLLM_PYTHON", "LOG_SAMPLES", "MODEL_ARGS", "ALLOW_HF_MISMATCH",
          "CHAINS", "RUNGS", "IDLE", "STEPS", "MODE", "TPP", "STOP_TPP", "DRY_RUN")
 SMALL = ("hellaswag,arc_easy,arc_challenge,piqa,winogrande,openbookqa,sciq,boolq,lambada_openai,copa,social_iqa,"
          "commonsense_qa")
@@ -170,7 +170,7 @@ def test_lm_eval_export_convention_and_layout(tmp_path):
     lines = plus_lines(res.stdout)
     outs = [model_args(l)[1] for l in lines]
     assert [c[c.index("--output_path") + 1] for c in outs] == [
-        f"{tmp_path}/runs/{RUN}/lm_eval/{n}/results.json"
+        f"{REPO}/logs/pretrain_evals/{RUN}/{n}/results.json"
         for n in ("main_iter2800", "main_iter14000", "tpp20_iter7000", "tpp50_iter17500")]   # version order
     args, cmd = model_args(lines[0])
     assert lines[0].startswith("(tokens: eos) /venv/bin/python -m lm_eval run --model vllm ")
@@ -183,9 +183,10 @@ def test_lm_eval_export_convention_and_layout(tmp_path):
     (tmp_path / "data").mkdir()
     res = run_script("ladder/eval/lm_eval.sh", {"MODEL": f"{hf}/tpp50_iter17500/", "TASK_SET": "core",
                                                 "NUM_FEWSHOT": "5", "EVAL_DATA_DIR": tmp_path / "data",
+                                                "EVAL_ROOT": tmp_path / "evals",
                                                 "MODEL_ARGS": "max_model_len=2048"})
     args, cmd = model_args(plus_lines(res.stdout)[0])
-    assert cmd[cmd.index("--output_path") + 1] == f"{tmp_path}/runs/{RUN}/lm_eval/tpp50_iter17500_core_5shot/results.json"
+    assert cmd[cmd.index("--output_path") + 1] == f"{tmp_path}/evals/{RUN}/tpp50_iter17500_core_5shot/results.json"
     assert cmd[cmd.index("--tasks") + 1].startswith(SMALL + ",mmlu,race,wikitext")
     assert cmd[cmd.index("--num_fewshot") + 1] == "5" and args["max_model_len"] == "2048"
     assert "(offline)" in res.stdout
@@ -202,29 +203,29 @@ def test_lm_eval_reference_model_and_overrides(tmp_path):
     ref = tmp_path / "models" / "Qwen3-0.6B-Base"
     ref.mkdir(parents=True)
     (ref / "config.json").write_text(json.dumps({"eos_token_id": 151643}))
-    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": ref})
+    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": ref, "EVAL_ROOT": tmp_path / "evals"})
     assert res.returncode == 0, res.stderr
     line = plus_lines(res.stdout)[0]
     args, cmd = model_args(line)
     assert line.startswith("(tokens: default) ") and "add_bos_token" not in args and "prefix_token_id" not in args
-    assert cmd[cmd.index("--output_path") + 1] == f"{tmp_path}/models/lm_eval/Qwen3-0.6B-Base/results.json"
+    assert cmd[cmd.index("--output_path") + 1] == f"{tmp_path}/evals/models/Qwen3-0.6B-Base/results.json"
     res = run_script("ladder/eval/lm_eval.sh", {"MODEL": ref, "TOKENS": "eos", "EVAL_DIR": tmp_path / "x"})
     args, cmd = model_args(plus_lines(res.stdout)[0])
     assert args["prefix_token_id"] == "151643" and cmd[cmd.index("--output_path") + 1] == f"{tmp_path}/x/results.json"
-    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": ref, "TOKENS": "eos"})
+    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": ref, "TOKENS": "eos", "EVAL_ROOT": "logs/x"})   # relative
     cmd = model_args(plus_lines(res.stdout)[0])[1]
-    assert cmd[cmd.index("--output_path") + 1] == f"{tmp_path}/models/lm_eval/Qwen3-0.6B-Base_tokeos/results.json"
+    assert cmd[cmd.index("--output_path") + 1] == f"{REPO}/logs/x/models/Qwen3-0.6B-Base_tokeos/results.json"
 
 
 def test_lm_eval_skips_and_refusals(tmp_path):
     hf = tmp_path / "runs" / RUN / "hf"
     make_export(hf / "tpp50_iter17500")
     make_export(hf / "tpp20_iter7000", passed=False)
-    done = tmp_path / "runs" / RUN / "lm_eval" / "main_iter35000"
+    done = tmp_path / "evals" / RUN / "main_iter35000"
     make_export(hf / "main_iter35000")
     done.mkdir(parents=True)
     (done / "results.json").write_text("{}")
-    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": f"{hf}/*"})
+    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": f"{hf}/*", "EVAL_ROOT": tmp_path / "evals"})
     assert res.returncode == 1                               # the failed export
     assert "failed the Megatron vs HF logits check" in res.stderr
     assert "results.json exists, skipped" in res.stdout
@@ -304,8 +305,11 @@ def test_collect(tmp_path):
     (out / "results_2026-11-28T09-00-00.000000.json").write_text(json.dumps({"results": {}}))
     (out / "results_2026-11-28T10-00-00.000000.json").write_text(json.dumps(RESULTS))
     tasks = "hellaswag,winogrande,lambada_openai,wikitext,gsm8k,piqa"
+    every_run = tmp_path / "evals" / "summary.jsonl"
     util.main(["collect", "--model", str(exp), "--out", str(out), "--tasks", tasks, "--task-set", "custom",
-               "--num-fewshot", "", "--limit", "200", "--tokens", "eos"])
+               "--num-fewshot", "", "--limit", "200", "--tokens", "eos", "--summary", str(out.parent / "summary.jsonl"),
+               "--summary", str(every_run), "--summary", str(out.parent / "." / "summary.jsonl")])   # the last: a duplicate
+    assert every_run.read_text() == (out.parent / "summary.jsonl").read_text()
     assert json.loads((out / "results.json").read_text()) == RESULTS
     rows = [json.loads(l) for l in (out.parent / "summary.jsonl").read_text().splitlines()]
     assert len(rows) == 1

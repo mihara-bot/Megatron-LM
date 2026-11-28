@@ -7,17 +7,9 @@
 #   FAMILY=llama3 bash data_mixing/tokenize_polaris.sh cleanup   # after a passing report: delete the train pieces
 #   steps one at a time: verify | tokenize | merge | inspect | report | cleanup
 #
-# Tests first (1 GPU, a few minutes; the tests themselves only use the CPU; output in data_mixing-test-<job>.out):
-#   sbatch --partition=polaris --account=polaris --job-name=dm-test --nodes=1 --ntasks=1 --gres=gpu:h200:1 \
-#       --cpus-per-task=8 --mem=32G --time=00:30:00 --chdir="$PWD" --export=ALL,FAMILY=llama3 \
-#       --output="data_mixing-test-%j.out" \
-#       --wrap='srun --ntasks=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" ht-run bash -e data_mixing/tokenize_polaris.sh test'
-#
-# SLURM (CPU job, at most 128 CPUs per node; one job per family, they can run at the same time):
-#   sbatch --partition=polaris --account=polaris --job-name=tok-llama3 --nodes=1 --ntasks=1 \
-#       --cpus-per-task=128 --mem=512G --time=24:00:00 --chdir="$PWD" --export=ALL,FAMILY=llama3 \
-#       --output="tok-llama3-%j.out" \
-#       --wrap='srun --ntasks=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" ht-run bash -e data_mixing/tokenize_polaris.sh all'
+# On SLURM submit the two sbatch files next to this script (logs in /fast/users/<user>/runs/):
+#   FAMILY=llama3 sbatch data_mixing/test_polaris.sbatch                          # tests, 1 GPU, minutes
+#   FAMILY=llama3 sbatch --job-name=tok-llama3 data_mixing/tokenize_polaris.sbatch  # STEP=all, 128 CPUs
 # tokenize is resumable: submitting the same job again skips the finished pieces.
 #
 # Environment (defaults in brackets):

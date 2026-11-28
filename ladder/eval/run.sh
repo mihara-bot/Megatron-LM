@@ -14,7 +14,7 @@ SBATCH_1GPU=(sbatch --parsable -A polaris -p polaris -N 1 --ntasks-per-node=1 --
              --mem=128G -o logs/%x-%j.out)
 
 # Jobs inherit this shell's environment: nothing left over from another run may pick a different one.
-unset RUN TAGS ITERS HEAD_SCALE SFN_WEIGHT EVAL_DIR TOKENS NUM_FEWSHOT TASK_SET MODEL_ARGS
+unset RUN TAGS ITERS HEAD_SCALE SFN_WEIGHT EVAL_DIR EVAL_ROOT TOKENS NUM_FEWSHOT TASK_SET MODEL_ARGS
 
 # export (1 GPU, Megatron env): plain head -> the run directory above
 EXPORT=$(CONFIG=llama3_r1 OPT=muon LR=2.8e-3 HEAD=plain MARGIN_D=0 MARGIN_REVERSE=0 \
@@ -33,4 +33,4 @@ else
 fi
 EVAL=$("${SBATCH_1GPU[@]}" -J lm-eval-r1-plain -t "$TIME" --dependency=afterok:"$EXPORT" \
     --wrap 'srun --ntasks=1 ht-run bash ladder/eval/lm_eval.sh')
-echo "eval job $EVAL (after $EXPORT): results in $RUN_DIR/lm_eval/"
+echo "eval job $EVAL (after $EXPORT): results in logs/pretrain_evals/$(basename "$RUN_DIR")/"
