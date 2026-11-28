@@ -90,8 +90,27 @@ def gpu():
     err = ((a @ a).float() - a.float() @ a.float()).abs().max().item()
     if not err < 1.0:
         raise RuntimeError(f"bf16 matmul error {err}")
-    driver = torch._C._cuda_getDriverVersion() if hasattr(torch._C, "_cuda_getDriverVersion") else "?"
-    return f"{torch.cuda.get_device_name()} (driver CUDA {driver}), bf16 matmul ok"
+    try:
+        import pynvml  # nvidia-ml-py, a vLLM dependency
+
+        pynvml.nvmlInit()
+        driver = pynvml.nvmlSystemGetDriverVersion()
+    except Exception:  # noqa: BLE001
+        driver = "?"
+    detail = f"{torch.cuda.get_device_name()} (driver {driver}), bf16 matmul ok"
+    # run_isolated.sh replaced the launcher's GPU UUIDs by indices: device 0 must still be the allocated GPU.
+    expected = os.environ.get("CUDA_VISIBLE_DEVICES_UUIDS", "").split(",")[0].strip()
+    if expected:
+        got = str(getattr(torch.cuda.get_device_properties(0), "uuid", ""))
+        norm = lambda u: u.lower().removeprefix("gpu-")  # noqa: E731
+        if not got:
+            detail += f"; allocated {expected} (torch reports no uuid to compare)"
+        elif norm(got) != norm(expected):
+            raise RuntimeError(f"device 0 is GPU-{norm(got)}, but the job was given {expected} "
+                               f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')})")
+        else:
+            detail += f"; device 0 = allocated {expected} (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})"
+    return detail
 
 
 def tiny_llama(tokenizer_dir, out_dir):
