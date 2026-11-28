@@ -1,0 +1,13 @@
+{
+ "_note": "Coarse topic groups of the 20 gvlassis/ClimbMix clusters (ClimbMix v1 labels, revised by hand: 12 alone, 19+20 'Society and opinion', 5 alone). Copied from the v1 data build; the validation sets are written per group in this order, and the slug is the directory and validation-set name.",
+ "groups": [
+  {"slug": "science_nature", "name": "Science and nature", "clusters": [6, 7, 9, 16]},
+  {"slug": "consumer", "name": "Consumer and practical", "clusters": [12]},
+  {"slug": "games_arts", "name": "Games, arts and recreation", "clusters": [8, 13, 14, 15]},
+  {"slug": "health", "name": "Health and medicine", "clusters": [10, 17]},
+  {"slug": "education", "name": "Education and humanities", "clusters": [1, 2, 3, 4]},
+  {"slug": "society", "name": "Society and opinion", "clusters": [19, 20]},
+  {"slug": "business", "name": "Business and finance", "clusters": [5]},
+  {"slug": "computing", "name": "Computing", "clusters": [11, 18]}
+ ]
+}

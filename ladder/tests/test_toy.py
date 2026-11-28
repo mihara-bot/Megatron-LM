@@ -494,6 +494,12 @@ def test_chain_dry_run(tmp_path):
     cmds = [line for line in res.stdout.splitlines() if line.startswith("+ ")]
     assert "iter_122" in cmds[0] and "iter_974" in cmds[0] and "--map-ms=-3 " in cmds[0]
     assert bash("ladder/toy/chain.sh", {**denv, "DECODE_ITERS": "first"}).returncode != 0
+    # SFT protocol B: its own SFT directories (ladder/sft/common.sh), none exported yet
+    res = bash("ladder/toy/chain.sh", {**denv, "SFT_MARGIN_D": "0.05", "SFT_MARGIN_REVERSE": "1"})
+    assert res.returncode == 0, res.stderr
+    assert not [line for line in res.stdout.splitlines() if line.startswith("+ ")]
+    assert f"{run}_main_sft_toy_cond_B_rev_d0.05/hf" in res.stdout
+    assert bash("ladder/toy/chain.sh", {**denv, "SFT_MARGIN_REVERSE": "1"}).returncode != 0   # needs SFT_MARGIN_D
     assert bash("ladder/toy/chain.sh", {**env, "STAGES": "pretrain,bogus"}).returncode != 0
     assert bash("ladder/toy/chain.sh", {**env, "HEAD": "xfn"}).returncode != 0
 
@@ -532,6 +538,13 @@ def test_run_toy_dry_run(tmp_path):
     assert res.returncode == 0, res.stderr
     dec = [line.strip() for line in res.stdout.splitlines() if line.startswith("   CONFIG=")]
     assert [c.replace(" STAGES=decode", "") for c in dec] == chains and res.stdout.count("+ sbatch") == 1
+    assert bash("ladder/toy/run_toy.sh", {**env, "PHASE": "sftB"}).returncode != 0      # needs LR
+    res = bash("ladder/toy/run_toy.sh", {**env, "PHASE": "sftB", "LR": "4e-3"})
+    assert res.returncode == 0, res.stderr
+    sb = [line.strip() for line in res.stdout.splitlines() if line.startswith("   CONFIG=")]
+    assert len(sb) == 12 and len(set(sb)) == 12 and res.stdout.count("+ sbatch") == 1
+    assert all(c.endswith("STAGES=sft,decode") and "SFT_MARGIN_REVERSE=1" in c and "HEAD=hfn" in c for c in sb)
+    assert sum("MARGIN_D=0.05 MARGIN_REVERSE=1 " in c for c in sb) == 6                 # B1 starts
     assert not (tmp_path / "specs").exists(), "a dry run writes nothing"
 
 
@@ -569,15 +582,20 @@ def test_summarize(tmp_path):
         run = f"toy_l2_muon_lr2e-3_hfn_rev_d0.02_seed{seed}"
         put(out / "runs" / run / "hf" / "main_iter6250", fake_probe(kl))
         put(out / "sft" / f"{run}_main_sft_toy_cond" / "hf" / "iter_1100", fake_probe(kl, pass1=0.3 + seed / 10))
+    put(out / "sft" / "toy_l2_muon_lr2e-3_hfn_rev_d0.02_seed1_main_sft_toy_cond_B_rev_d0.05" / "hf" / "iter_974",
+        fake_probe(0.04, pass1=0.9))                                         # SFT protocol B
     pre, sft = summarize.collect(str(tmp_path))
-    assert len(pre) == 6 and len(sft) == 2
+    assert len(pre) == 6 and len(sft) == 3
+    assert sorted(r["sft_protocol"] for r in sft) == ["A", "A", "B_rev_d0.05"]
     last = summarize.last_iteration(pre)
     assert {r["iteration"] for r in last} == {6250}
     g = summarize.group([r for r in last if r["variant"] == "hfn_rev_d0.02"], ["variant", "lr"], summarize.PRE_COLS)
     assert g[0]["seeds"] == 2 and g[0]["kl"] == pytest.approx(0.05) and g[0]["kl_sd"] == pytest.approx(math.sqrt(2e-4))
     assert g[0]["kl_all"] == pytest.approx(0.05)
-    gs = summarize.group(sft, ["sft_mode", "variant", "lr"], summarize.SFT_COLS)
-    assert gs[0]["heldout_pass@1"] == pytest.approx(0.45)
+    gs = {g["sft_protocol"]: g for g in summarize.group(sft, ["sft_mode", "sft_protocol", "variant", "lr"],
+                                                         summarize.SFT_COLS)}
+    assert gs["A"]["heldout_pass@1"] == pytest.approx(0.45) and gs["A"]["seeds"] == 2
+    assert gs["B_rev_d0.05"]["heldout_pass@1"] == pytest.approx(0.9) and gs["B_rev_d0.05"]["seeds"] == 1
     res = subprocess.run([sys.executable, "ladder/toy/summarize.py", "lr", "--root", str(tmp_path)], cwd=REPO,
                          capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
@@ -592,8 +610,10 @@ def test_summarize(tmp_path):
     hfn = {(r["decode"], r["value"]): r for r in dec if r["variant"] == "hfn_rev_d0.02"}
     assert set(hfn) == {("T", "1.0"), ("T", "2.0"), ("map_m", "1.0")}
     assert float(hfn["T", "2.0"]["kl"]) == pytest.approx(0.1) and hfn["T", "2.0"]["seeds"] == "2"
-    rows = list(csv.DictReader(open(report / "sft_decode_summary.csv")))
+    allrows = list(csv.DictReader(open(report / "sft_decode_summary.csv")))
+    rows = [r for r in allrows if r["sft_protocol"] == "A"]
     assert [r["decode"] for r in rows] == ["T1", "T1.3", "M-1.2"]
+    assert [r["decode"] for r in allrows if r["sft_protocol"] == "B_rev_d0.05"] == ["T1", "T1.3", "M-1.2"]
     dec = {r["decode"]: r for r in rows}
     assert float(dec["T1"]["heldout_pass@1"]) == pytest.approx(0.45)
     assert float(dec["T1.3"]["heldout_pass@1"]) == pytest.approx(0.225)

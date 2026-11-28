@@ -2,7 +2,9 @@
 
 The Megatron counterpart of pretrain_LLM_pipeline's SFT (docs/sft.md there): OpenMathInstruct-2, 500k examples x
 10 epochs, then GSM8K / MATH-500 / AMC-2023 / Countdown pass@k. Protocol A for margin runs: SFT keeps the
-pretraining LM head with no margin (see TOKEN_MARGIN.md).
+pretraining LM head with no margin (see TOKEN_MARGIN.md). Protocol B (`SFT_MARGIN_D`, `SFT_MARGIN_REVERSE`, for
+train_sft.sh / export.sh / run_sft.sh alike): the pretraining head with that token margin in the SFT loss; its
+SFT runs are named `..._sft_<SFT_TAG>_B[_rev]_d<D>` (ladder/sft/common.sh).
 
 ## 1. Data (once per cluster)
 

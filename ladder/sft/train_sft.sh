@@ -8,7 +8,9 @@
 #
 # Start point: the latest checkpoint of the pretraining run in $OUT_ROOT/runs/<run>/ckpt/<PRETRAIN_TAG>
 # (ladder/sft/common.sh names it from CONFIG / OPT / LR / HEAD vars), model weights only.
-# LM head (protocol A): the pretraining head, no margin, no sfn penalty (hfn -> hfn, nfn/sfn -> nfn).
+# LM head (protocol A, default): the pretraining head, no margin, no sfn penalty (hfn -> hfn, nfn/sfn -> nfn).
+# Protocol B (SFT_MARGIN_D, SFT_MARGIN_REVERSE): the pretraining head with that token margin in the SFT loss; the run
+# name gets _B[_rev]_d<SFT_MARGIN_D> (ladder/sft/common.sh).
 #
 # Same as the pipeline SFT:
 #   data      ladder/sft/prepare_sft_data.py output: prompt + response + EOS, prompt masked, the pipeline's
@@ -27,7 +29,8 @@
 #
 # Required: CONFIG, LR, OUT_ROOT, SFT_DATA_DIR (TOKENIZER defaults to the family's, see common.sh)
 # Optional: OPT (the pretraining run's optimizer, default muon: it names the run), SFT_OPT (default muon),
-#   HEAD / MARGIN_D / MARGIN_REVERSE / HEAD_SCALE / SFN_WEIGHT (the pretraining run's), PRETRAIN_TAG,
+#   HEAD / MARGIN_D / MARGIN_REVERSE / HEAD_SCALE / SFN_WEIGHT (the pretraining run's), SFT_MARGIN_D /
+#   SFT_MARGIN_REVERSE (protocol B), PRETRAIN_TAG,
 #   PRETRAIN_RUN, SFT_TAG, SFT_LR, SFT_GBS (examples per step), SEED (default 1234), WANDB_PROJECT, VENV, EXTRA_ARGS,
 #   SFT_TOKENS_PER_RANK (tokens per packed microbatch per GPU, default SEQ_LEN; larger = fewer, bigger microbatches,
 #   same examples per step and same loss), SFT_EVAL (auto: validation when valid.parquet exists | 1: require it |

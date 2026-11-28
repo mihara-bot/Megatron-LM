@@ -68,6 +68,7 @@ python3 ladder/toy/summarize.py lr --root $TOY_ROOT  # -> the LR with the lowest
 PHASE=grid LR=<that LR> bash ladder/toy/run_toy.sh   # 15 variants x 3 seeds, each with SFT (3 node jobs)
 python3 ladder/toy/summarize.py table --root $TOY_ROOT
 PHASE=decode LR=<that LR> bash ladder/toy/run_toy.sh # re-sample the SFT models: T up to 2, margin map (1 node job)
+PHASE=sftB LR=<that LR> bash ladder/toy/run_toy.sh   # SFT protocol B: margin kept in SFT, + decode (1 node job)
 python3 ladder/toy/summarize.py table --root $TOY_ROOT --lr <that LR>   # -> report/sft_decode_summary.csv
 ```
 
@@ -101,6 +102,12 @@ SFT models through that map (`probe.py --update --map-ms=...`, keys `M<m>` next 
 `paths.sample`); `report/sft_decode_summary.csv` then compares, per SFT mode and variant, temperature against the map
 (pass@k, distinct paths, coverage, and the failure rates such as `heldout_fail_bad_edge`), e.g. the plain-SFT model
 decoded through the map against a model whose SFT itself used the margin.
+
+**SFT protocol B.** `PHASE=sftB` trains SFT with the margin kept in the loss (`SFT_MARGIN_D`, `SFT_MARGIN_REVERSE`,
+ladder/sft/common.sh) from two pretraining runs of the grid: hfn d = 0 (B0, margin in SFT only) and hfn reverse 0.05
+(B1, margin in both), at reverse 0.02 / 0.05, both SFT modes, 3 seeds, then the decode stage. Their SFT runs are
+`<run>_main_sft_toy_<mode>_B_rev_d<D>`; the tables split SFT rows by `sft_protocol` (A, B_rev_d0.02, ...). Compare B0
+against protocol A of the same start decoded through the map (D), and B0 against B1.
 
 ## Tests
 

@@ -8,7 +8,7 @@
 #     --mem=128G -t 04:00:00 -o logs/%x-%j.out --wrap 'srun --ntasks=1 ht-run bash ladder/sft/export.sh'
 #
 # Which run: the variables of ladder/sft/train_sft.sh (CONFIG, OPT, LR, HEAD / MARGIN_D / ..., PRETRAIN_TAG,
-# SFT_TAG, OUT_ROOT; see ladder/sft/common.sh).
+# SFT_TAG, SFT_MARGIN_D / SFT_MARGIN_REVERSE for protocol B, OUT_ROOT; see ladder/sft/common.sh).
 # Optional:
 #   TARGET   sft (default) | pretrained: the pretraining checkpoint SFT starts from (the pre-SFT reference)
 #   ITERS    latest (default) | all | space-separated iterations
@@ -31,7 +31,7 @@ source ladder/sft/common.sh
 case "$TARGET" in
 sft)
     CKPT_DIR=$SFT_DIR/ckpt
-    EXPORT_HEAD=(HEAD="$( [ "$HEAD" = sfn ] && echo nfn || echo "$HEAD" )" MARGIN_D=0 MARGIN_REVERSE=0)
+    EXPORT_HEAD=("${SFT_HEAD_ENV[@]}")          # common.sh: the SFT run's head (protocol A or B)
     hf_dir() { echo "$SFT_DIR/hf/iter_$1"; }
     ;;
 pretrained)

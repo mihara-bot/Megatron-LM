@@ -12,9 +12,12 @@
 #   PHASE=decode LR=<that LR> bash ladder/toy/run_toy.sh  the same chains with STAGES=decode: re-sample the SFT
 #                                                   models at more temperatures and through the post-hoc margin map
 #                                                   (chain.sh DECODE_ARGS); one node job (RUNS_PER_GPU default 6)
+#   PHASE=sftB LR=<that LR> bash ladder/toy/run_toy.sh    SFT protocol B (the margin kept in the SFT loss) from the
+#                                                   SFTB_STARTS pretraining runs at the SFTB_MARGINS margins x SEEDS,
+#                                                   both SFT modes, then the decode stage; one node job
 #
-# Environment: TOY_ROOT (default /fast/users/zhuangxinlin/toy_margin), PHASE (lr | grid | decode), LR (grid,
-#   decode: required),
+# Environment: TOY_ROOT (default /fast/users/zhuangxinlin/toy_margin), PHASE (lr | grid | decode | sftB), LR
+#   (grid, decode, sftB: required),
 #   SEEDS (grid, default "1 2 3"), CONFIG (default toy_l2), RUNS_PER_GPU (default 2), TIME (sbatch, 12:00:00),
 #   QOS (e.g. polaris_idle), LOCAL=1 (run the packs one after another on this node with pack.sh instead of
 #   sbatch), DRY_RUN=1 (print the specs and commands, write and submit nothing).
@@ -25,7 +28,7 @@ set -euo pipefail
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$REPO"
 export TOY_ROOT=${TOY_ROOT:-/fast/users/zhuangxinlin/toy_margin}
-PHASE=${PHASE:?set PHASE=lr, grid or decode}
+PHASE=${PHASE:?set PHASE=lr, grid, decode or sftB}
 CONFIG=${CONFIG:-toy_l2}
 if [ "$PHASE" = decode ]; then RUNS_PER_GPU=${RUNS_PER_GPU:-6}; else RUNS_PER_GPU=${RUNS_PER_GPU:-2}; fi
 SLOTS=$((8 * RUNS_PER_GPU))
@@ -50,6 +53,16 @@ VARIANTS=(
     "HEAD=nfn MARGIN_D=0.02 MARGIN_REVERSE=1"
 )
 
+# ---- SFT protocol B (PHASE=sftB): the token margin kept in the SFT loss (ladder/sft/common.sh) ---------------------
+SFTB_STARTS=(                                               # pretraining runs of the grid
+    "HEAD=hfn MARGIN_D=0"                                   # B0: margin in SFT only
+    "HEAD=hfn MARGIN_D=0.05 MARGIN_REVERSE=1"               # B1: reverse margin in pretraining and SFT
+)
+SFTB_MARGINS=(
+    "SFT_MARGIN_D=0.02 SFT_MARGIN_REVERSE=1"                # m = -1.2
+    "SFT_MARGIN_D=0.05 SFT_MARGIN_REVERSE=1"                # m = -3
+)
+
 CHAINS=()
 case "$PHASE" in
 lr)
@@ -68,8 +81,18 @@ grid | decode)
         done
     done
     ;;
+sftB)
+    : "${LR:?PHASE=sftB needs LR, the one of the grid whose pretraining runs SFT starts from}"
+    for seed in ${SEEDS:-1 2 3}; do
+        for start in "${SFTB_STARTS[@]}"; do
+            for sm in "${SFTB_MARGINS[@]}"; do
+                CHAINS+=("CONFIG=$CONFIG $(echo $start) LR=$LR SEED=$seed $(echo $sm) STAGES=sft,decode")
+            done
+        done
+    done
+    ;;
 *)
-    echo "PHASE must be lr, grid or decode, got $PHASE" >&2; exit 1 ;;
+    echo "PHASE must be lr, grid, decode or sftB, got $PHASE" >&2; exit 1 ;;
 esac
 
 SPEC_DIR=$TOY_ROOT/specs

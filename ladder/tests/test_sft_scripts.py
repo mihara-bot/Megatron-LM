@@ -222,7 +222,8 @@ def run_script(script, env):
     full = {k: v for k, v in os.environ.items()
             if k not in HEAD_VARS + ("GBS", "SFT_GBS", "SFT_LR", "PRETRAIN_TAG", "PRETRAIN_RUN", "ITERS",
                                      "TARGET", "TASKS", "NUM_SAMPLES", "MAX_PROBLEMS", "NNODES", "TOKENIZER",
-                                     "MODEL", "EVAL_DIR", "FORCE", "OUT_ROOT", "OPT", "SFT_OPT")}
+                                     "MODEL", "EVAL_DIR", "FORCE", "OUT_ROOT", "OPT", "SFT_OPT", "SFT_MARGIN_D",
+                                     "SFT_MARGIN_REVERSE")}
     full.update({"DRY_RUN": "1", **{k: str(v) for k, v in env.items()}})
     return subprocess.run(["bash", script], cwd=REPO, env=full, capture_output=True, text=True)
 
@@ -240,14 +241,21 @@ def flag(cmd, name):
     return cmd[cmd.index(name) + 1] if name in cmd else None
 
 
-@pytest.mark.parametrize("env,head,run", [
-    ({}, [], "llama3_r1_muon_lr2.8e-3"),
+@pytest.mark.parametrize("env,head,run,suffix", [
+    ({}, [], "llama3_r1_muon_lr2.8e-3", ""),
     ({"HEAD": "hfn", "MARGIN_D": "0.02"}, ["--lm-head-feature-norm", "hfn", "--token-margin", "0",
-                                          "--lm-head-feature-norm-scale", "60"], "llama3_r1_muon_lr2.8e-3_hfn_d0.02"),
+                                          "--lm-head-feature-norm-scale", "60"], "llama3_r1_muon_lr2.8e-3_hfn_d0.02", ""),
     ({"HEAD": "sfn", "MARGIN_D": "0.02", "MARGIN_REVERSE": "1"}, ["--lm-head-feature-norm", "nfn", "--token-margin",
-                                                                 "0"], "llama3_r1_muon_lr2.8e-3_sfn_rev_d0.02"),
+                                                                 "0"], "llama3_r1_muon_lr2.8e-3_sfn_rev_d0.02", ""),
+    # protocol B: the pretraining head with the SFT margin, its own run name
+    ({"HEAD": "hfn", "MARGIN_D": "0.02", "SFT_MARGIN_D": "0.05", "SFT_MARGIN_REVERSE": "1"},
+     ["--lm-head-feature-norm", "hfn", "--token-margin", "0.05", "--token-margin-reverse",
+      "--lm-head-feature-norm-scale", "60"], "llama3_r1_muon_lr2.8e-3_hfn_d0.02", "_B_rev_d0.05"),
+    ({"HEAD": "sfn", "MARGIN_D": "0.02", "SFT_MARGIN_D": "0"},                  # sfn keeps its penalty under B
+     ["--lm-head-feature-norm", "sfn", "--token-margin", "0", "--lm-head-feature-norm-scale", "60",
+      "--soft-feature-norm-weight", "1e-3"], "llama3_r1_muon_lr2.8e-3_sfn_d0.02", "_B_d0"),
 ])
-def test_train_sft_plan(tmp_path, sft_data, env, head, run):
+def test_train_sft_plan(tmp_path, sft_data, env, head, run, suffix):
     res = run_script("ladder/sft/train_sft.sh", {"CONFIG": "llama3_r1", "OPT": "muon", "LR": "2.8e-3",
                                                  "OUT_ROOT": tmp_path, "SFT_DATA_DIR": sft_data,
                                                  "PRETRAIN_TAG": "tpp100", **env})
@@ -257,7 +265,7 @@ def test_train_sft_plan(tmp_path, sft_data, env, head, run):
                 or (i > 0 and cmd[i - 1].startswith(("--lm-head", "--token-margin", "--soft-feature")))]
     assert got_head == head
     assert flag(cmd, "--pretrained-checkpoint") == f"{tmp_path}/runs/{run}/ckpt/tpp100"
-    assert flag(cmd, "--load") == flag(cmd, "--save") == f"{tmp_path}/sft/{run}_tpp100_sft_omi2_500k_ep10/ckpt"
+    assert flag(cmd, "--load") == flag(cmd, "--save") == f"{tmp_path}/sft/{run}_tpp100_sft_omi2_500k_ep10{suffix}/ckpt"
     assert flag(cmd, "--global-batch-size") == "312"            # 8 GPUs: 315.43 -> 39 x 8
     assert flag(cmd, "--train-iters") == str(5000000 // 312)
     assert flag(cmd, "--save-interval") == str(500000 // 312)
@@ -267,6 +275,16 @@ def test_train_sft_plan(tmp_path, sft_data, env, head, run):
     assert flag(cmd, "--sft-tokenizer-prompt-format") == "identity"
     assert flag(cmd, "--lr-decay-style") == "cosine" and flag(cmd, "--min-lr") == "0"
     assert flag(cmd, "--optimizer") == "muon"
+
+
+def test_train_sft_protocol_b_checks(tmp_path, sft_data):
+    base = {"CONFIG": "llama3_r1", "LR": "2.8e-3", "OUT_ROOT": tmp_path, "SFT_DATA_DIR": sft_data}
+    res = run_script("ladder/sft/train_sft.sh", {**base, "SFT_MARGIN_D": "0.05"})                # plain head
+    assert res.returncode != 0 and "feature-norm head" in res.stderr
+    res = run_script("ladder/sft/train_sft.sh", {**base, "HEAD": "hfn", "SFT_MARGIN_REVERSE": "1"})
+    assert res.returncode != 0 and "needs SFT_MARGIN_D" in res.stderr
+    for bad in ({"SFT_MARGIN_D": "x"}, {"SFT_MARGIN_D": "0", "SFT_MARGIN_REVERSE": "1"}):
+        assert run_script("ladder/sft/train_sft.sh", {**base, "HEAD": "hfn", **bad}).returncode != 0
 
 
 def test_train_sft_requires_finished_pretraining(tmp_path, sft_data):
@@ -348,6 +366,14 @@ def test_export_plan(tmp_path):
     out = run_script("ladder/sft/export.sh", {**base, "TARGET": "pretrained"})
     lines = [l for l in out.stdout.splitlines() if l.startswith("+ ")]
     assert "HEAD=hfn MARGIN_D=0.02" in lines[0] and f"OUT={tmp_path}/runs/{run}/hf/main_iter35000" in lines[0]
+    # protocol B: its own SFT directory, exported with its SFT head
+    sft_b = tmp_path / "sft" / f"{run}_main_sft_omi2_500k_ep10_B_rev_d0.05"
+    (sft_b / "ckpt" / "iter_0016025").mkdir(parents=True)
+    (sft_b / "ckpt" / "latest_checkpointed_iteration.txt").write_text("16025")
+    out = run_script("ladder/sft/export.sh", {**base, "SFT_MARGIN_D": "0.05", "SFT_MARGIN_REVERSE": "1"})
+    assert out.returncode == 0, out.stderr
+    lines = [l for l in out.stdout.splitlines() if l.startswith("+ ")]
+    assert "HEAD=hfn MARGIN_D=0.05 MARGIN_REVERSE=1" in lines[0] and f"OUT={sft_b}/hf/iter_16025 " in lines[0]
 
 
 def test_eval_models(tmp_path):

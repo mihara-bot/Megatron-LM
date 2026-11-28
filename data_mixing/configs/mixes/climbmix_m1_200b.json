@@ -1,0 +1,18 @@
+{
+ "_note": "ClimbMix m1 (the v1 m1 cluster weights, alpha 0.5) at 200B Llama-3.1 tokens for Llama3 R3/R4 TPP100. Every cluster continues the v1 stream after the v1 validation documents, so the v1 50B training documents are the start of pass e0; clusters whose quota exceeds their documents are read again (13 clusters, up to ~3.35 passes, ~23B repeated tokens). The last val_tail_tokens_per_cluster of every cluster (never read by the v1 50B build) are held out as the per-group validation sets; val/all is the v1 val_all, unchanged.",
+ "name": "climbmix_m1_200b",
+ "reference": "../climbmix_v1_m1_reference.json",
+ "groups": "../climbmix_groups_v1.json",
+ "source_dir_regex": "^cluster_id=(\\d+)$",
+ "text_column": "text",
+ "weights": "reference",
+ "train_tokens": 200e9,
+ "max_epochs": 4,
+ "val_tail_tokens_per_cluster": 5e6,
+ "group_val_seed": 20261128,
+ "row_group_rows": 8192,
+ "requirements": {
+  "llama3_r3_tpp100": 94371840000,
+  "llama3_r4_tpp100": 178257920000
+ }
+}

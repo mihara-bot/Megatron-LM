@@ -93,9 +93,14 @@ PREFLIGHT_FLAGS=()
 if [ "${ALLOW_HF_MISMATCH:-0}" = 1 ]; then PREFLIGHT_FLAGS+=(--allow-hf-version-mismatch); fi
 
 # Expand globs now (inside the job), make the paths absolute (lm-eval runs from EVAL_DATA_DIR), order by version.
+# A pattern that matches nothing (a tag whose export was skipped) is only noted; a missing plain path is an error.
 MODELS=()
 for m in $MODEL; do
     if [ ! -d "$m" ]; then
+        case "$m" in
+        *[*?[]*)
+            echo "MODEL pattern $m matches no directory (nothing exported there yet), skipped" >&2; continue ;;
+        esac
         echo "MODEL entry $m is not a directory (not exported yet? see ladder/eval/export.sh)" >&2
         [ "${DRY_RUN:-0}" = 1 ] || exit 1
     else
@@ -103,6 +108,9 @@ for m in $MODEL; do
     fi
     MODELS+=("${m%/}")
 done
+if [ "${#MODELS[@]}" -eq 0 ]; then
+    echo "MODEL ($MODEL) matches no directory (see ladder/eval/export.sh)" >&2; exit 1
+fi
 SORTED=()
 while IFS= read -r m; do
     if [ -n "$m" ]; then SORTED+=("$m"); fi

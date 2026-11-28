@@ -18,13 +18,16 @@
 #   CONFIG        default toy_l2;  OPT  default muon
 #   STAGES        comma- or space-separated subset of: pretrain export probe sft decode (default the first four)
 #   SFT_MODES     default cond,canon (ladder/toy/make_data.py also writes uniform)
+#   SFT_MARGIN_D SFT_MARGIN_REVERSE   SFT protocol B: keep the head and train SFT with this token margin
+#                 (ladder/sft/common.sh; the SFT run name gets _B[_rev]_d<D>); unset: protocol A (no margin)
 #   PRE_ITERS     pretraining checkpoints to export + probe: all (default) | latest | "N N ..." (comma ok)
 #   SFT_ITERS     SFT checkpoints to export + probe: all (default) | latest | list
 #   PROBE_ARGS    extra probe.py arguments;  FORCE_PROBE=1 re-probes;  VENV;  PYTHON (default python)
 #   DECODE_ARGS   decode: the settings (default "--temps 0.7,1.0,1.3,1.6,2.0 --map-ms=-0.6,-1.2,-2,-3,-5")
 #   DECODE_ITERS  decode: latest (default: the last SFT export, as ladder/toy/summarize.py tables) | all
 #   DRY_RUN=1     print the commands (nothing exists yet, so no export / probe steps are listed)
-# Run directory: $TOY_ROOT/out/runs/<CONFIG>_<OPT>_lr<LR><HEAD_TAG>_seed<SEED>; SFT: $TOY_ROOT/out/sft/<run>_main_sft_toy_<mode>.
+# Run directory: $TOY_ROOT/out/runs/<CONFIG>_<OPT>_lr<LR><HEAD_TAG>_seed<SEED>; SFT: $TOY_ROOT/out/sft/<run>_main_sft_toy_<mode>
+# (+ _B[_rev]_d<D> under protocol B).
 set -euo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -78,6 +81,9 @@ import json, sys
 v = json.load(open(sys.argv[1])).get("validation")
 sys.exit(0 if v is None or v.get("passed") is True else 1)' "$1/export_meta.json"
 }
+sft_dir_of() {   # sft_dir_of <mode>: the SFT run directory as ladder/sft/common.sh names it (protocol A or B)
+    ( SFT_TAG=toy_$1 PRETRAIN_RUN=$RUN PRETRAIN_TAG=main; source ladder/sft/common.sh; echo "$SFT_DIR" )
+}
 probe_dirs() {   # probe_dirs <probe.py args ...> -- <HF dirs ...>: probes the good exports without probe.json
     local args=() dirs=() d
     while [ "$1" != -- ]; do args+=("$1"); shift; done
@@ -114,7 +120,7 @@ fi
 if has sft; then
     for mode in $SFT_MODES; do
         export SFT_TAG=toy_$mode SFT_DATA_DIR=$DATA_DIR/sft/$mode PRETRAIN_RUN=$RUN PRETRAIN_TAG=main
-        SFT_DIR=$OUT_ROOT/sft/${RUN}_main_sft_$SFT_TAG
+        SFT_DIR=$(sft_dir_of "$mode")
         run bash ladder/sft/train_sft.sh
         SFT_HF=()
         for it in $(iters_of "$SFT_DIR/ckpt" "$SFT_ITERS"); do SFT_HF+=("$SFT_DIR/hf/iter_$it"); done
@@ -126,7 +132,7 @@ if has sft; then
 fi
 if has decode; then
     for mode in $SFT_MODES; do
-        SFT_HF_DIR=$OUT_ROOT/sft/${RUN}_main_sft_toy_$mode/hf
+        SFT_HF_DIR=$(sft_dir_of "$mode")/hf
         dirs=()
         while read -r d; do
             if [ -n "$d" ] && [ -f "$d/probe.json" ] && export_ok "$d"; then dirs+=("$d"); fi

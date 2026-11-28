@@ -9,7 +9,10 @@
 # chains by name, e.g. `CHAINS="r1-plain r1-hfn-d0.02" bash ladder/eval/run_eval.sh`. IDLE: which steps run on idle
 # resources (--qos=polaris_idle, preemptible; both steps survive a requeue: export keeps the exports that passed their
 # check, eval skips the models with a results.json): 0 (default) | 1 or all | export | eval.
-# DRY_RUN=1 prints the sbatch commands (and the variables the jobs read) instead of submitting.
+# STEPS (export,eval | export | eval), TAGS, ITERS, TASK_SET / TASKS set on the command line apply to every chain (a
+# chain's own arguments override them), e.g. `STEPS=eval TASK_SET=core bash ladder/eval/run_eval.sh` re-evaluates the
+# existing exports with the larger set. DRY_RUN=1 prints the sbatch commands (and the variables the jobs read)
+# instead of submitting.
 # Once per cluster, before the first chain: the datasets (ladder/eval/download_datasets.sh) and lm-eval in the vLLM
 # environment (ladder/EVAL.md).
 set -euo pipefail
@@ -48,11 +51,11 @@ submit() {   # submit <sbatch command>: its job id; with DRY_RUN=1 print it inst
 # AFTER: a job the chain waits for, e.g. the run's branch job. STEPS=eval redoes the eval of existing exports (no
 # dependency), e.g. with TASK_SET=core.
 eval_chain() (
-    local name=$1 after="" steps=export,eval idle=$IDLE kv s run models t
+    local name=$1 after="" steps=${STEPS:-export,eval} idle=$IDLE kv s run models t
     shift
     if [ -n "${CHAINS:-}" ] && [[ " $CHAINS " != *" $name "* ]]; then return 0; fi
     export HEAD=plain MARGIN_D=0 MARGIN_REVERSE=0
-    unset RUN TAGS ITERS MODEL
+    unset RUN MODEL                               # per run; TAGS / ITERS / TASK_SET / TASKS from the caller apply to all
     for kv in "$@"; do
         case $kv in
             AFTER=*) after=${kv#AFTER=} ;;

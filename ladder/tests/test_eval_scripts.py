@@ -233,6 +233,13 @@ def test_lm_eval_skips_and_refusals(tmp_path):
     assert run_script("ladder/eval/lm_eval.sh", {"MODEL": f"{hf}/tpp50_iter17500", "TASK_SET": "huge"}).returncode != 0
     res = run_script("ladder/eval/lm_eval.sh", {"MODEL": "/nope"}, dry=False)
     assert res.returncode != 0 and "export.sh" in res.stderr
+    # a tag with nothing exported yet: its pattern is skipped, the others still run
+    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": f"{hf}/tpp100_iter* {hf}/tpp50_iter*"})
+    assert res.returncode == 0, res.stderr
+    assert "tpp100_iter* matches no directory" in res.stderr
+    assert [model_args(l)[0]["pretrained"] for l in plus_lines(res.stdout)] == [f"{hf}/tpp50_iter17500"]
+    res = run_script("ladder/eval/lm_eval.sh", {"MODEL": f"{hf}/tpp100_iter*"}, dry=False)
+    assert res.returncode == 1 and "matches no directory" in res.stderr
 
 
 # ---- lm_eval_util.py -------------------------------------------------------------------------------
@@ -333,3 +340,10 @@ def test_run_eval_chain(tmp_path):
     res = run_script("ladder/eval/run_eval.sh", {"OUT_ROOT": tmp_path, "RUNGS": "r1"})
     assert len(plus_lines(res.stderr)) == 6
     assert run_script("ladder/eval/run_eval.sh", {"OUT_ROOT": tmp_path, "IDLE": "train"}).returncode != 0
+    # caller-wide STEPS / TAGS / TASK_SET
+    res = run_script("ladder/eval/run_eval.sh", {"OUT_ROOT": tmp_path, "CHAINS": "r1-plain", "STEPS": "eval",
+                                                 "TAGS": "tpp20 tpp50", "TASK_SET": "core"})
+    (ev,) = plus_lines(res.stderr)
+    run = tmp_path / "runs" / "llama3_r1_muon_lr2.8e-3" / "hf"
+    assert f"TAGS=tpp20 tpp50 MODEL={run}/tpp20_iter* {run}/tpp50_iter* TASK_SET=core " in ev
+    assert "--dependency" not in ev and "-J lm-eval-r1-plain " in ev
