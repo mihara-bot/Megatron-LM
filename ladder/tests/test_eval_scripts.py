@@ -351,3 +351,119 @@ def test_run_eval_chain(tmp_path):
     run = tmp_path / "runs" / "llama3_r1_muon_lr2.8e-3" / "hf"
     assert f"TAGS=tpp20 tpp50 MODEL={run}/tpp20_iter* {run}/tpp50_iter* TASK_SET=core " in ev
     assert "--dependency" not in ev and "-J lm-eval-r1-plain " in ev
+
+
+# ---- check_datasets ---------------------------------------------------------------------------------
+import check_datasets as chk  # noqa: E402
+
+FAKE_LM_EVAL = '''
+import types
+
+
+def _entry(kind, cfg=None, tags=()):
+    return types.SimpleNamespace(kind=types.SimpleNamespace(name=kind), cfg=cfg or {}, tags=set(tags))
+
+
+class _Task:
+    def __init__(self, path, name=None):
+        self.config = types.SimpleNamespace(dataset_path=path, dataset_name=name)
+        self.eval_docs = list(range(7))
+
+
+class TaskManager:
+    task_index = {"hellaswag": _entry("TASK"), "social_iqa": _entry("TASK"), "broken": _entry("TASK"),
+                  "mmlu": _entry("GROUP", {"task": ["mmlu_a", "mmlu_b"]}), "mmlu_a": _entry("TASK"),
+                  "mmlu_b": _entry("TASK")}
+
+    def load_task_or_group(self, names):
+        n = names[0]
+        if n == "social_iqa":
+            raise ConnectionError("Couldn't reach 'lighteval/siqa' on the Hub (OfflineModeIsEnabled)")
+        if n == "broken":
+            raise RuntimeError("Dataset scripts are no longer supported, but found broken.py")
+        path = {"hellaswag": "Rowan/hellaswag", "mmlu_a": "cais/mmlu", "mmlu_b": "cais/mmlu"}[n]
+        return {n: _Task(path, n if n.startswith("mmlu") else None)}
+'''
+
+
+def test_check_datasets_helpers(tmp_path):
+    assert chk.missing_repo("ConnectionError: Couldn't reach 'lighteval/siqa' on the Hub (OfflineModeIsEnabled)") \
+        == "lighteval/siqa"
+    assert chk.missing_repo(f"FileNotFoundError: Couldn't find any data file at {tmp_path}/allenai/sciq.",
+                            str(tmp_path)) == "allenai/sciq"
+    assert chk.missing_repo("ValueError: BuilderConfig 'x' not found") is None
+    assert "refs/convert/parquet" in chk.hint("RuntimeError: Dataset scripts are no longer supported, but found x.py")
+
+    repo = tmp_path / "org" / "done"
+    (repo / ".hfd").mkdir(parents=True)
+    (repo / "data").mkdir()
+    (repo / "data" / "train.parquet").write_text("x")
+    (repo / ".hfd" / "aria2c_urls.txt").write_text("")                       # aria2c finished: empty session
+    assert chk.hfd_state(str(repo)) is None
+    (repo / ".hfd" / "aria2c_urls.txt").write_text("https://hf-mirror.com/datasets/org/done/resolve/main/a\n dir=\n")
+    assert "1 unfinished" in chk.hfd_state(str(repo))
+    (repo / ".hfd" / "aria2c_urls.txt").write_text("")
+    (repo / "data" / "test.parquet.aria2").write_text("")
+    assert "partial" in chk.hfd_state(str(repo))
+    (repo / "data" / "test.parquet.aria2").unlink()
+    (repo / ".hfd" / "wget_urls.txt").write_text(
+        "https://hf-mirror.com/datasets/org/done/resolve/main/data/train.parquet\n"
+        "https://hf-mirror.com/datasets/org/done/resolve/refs%2Fconvert%2Fparquet/data/valid.parquet\n")
+    assert "1 listed file(s) missing or empty, e.g. data/valid.parquet" in chk.hfd_state(str(repo))
+    (repo / "data" / "valid.parquet").write_text("y")
+    assert chk.hfd_state(str(repo)) is None
+    assert chk.hfd_state(str(tmp_path / "nope")) == "absent"
+
+
+def test_check_datasets_leaves():
+    from types import SimpleNamespace as NS
+
+    def e(kind, cfg=None, tags=()):
+        return NS(kind=NS(name=kind), cfg=cfg or {}, tags=set(tags))
+
+    index = {"core": e("GROUP", {"task": ["mmlu", "arc_easy"]}), "mmlu": e("GROUP", {"task": ["m1", "m2"]}),
+             "m1": e("TASK"), "m2": e("TASK"), "arc_easy": e("TASK", tags=["ai2_arc"]),
+             "arc_challenge": e("TASK", tags=["ai2_arc"]), "ai2_arc": e("TAG"),
+             "inline": e("GROUP", {"task": [{"task": "x", "num_fewshot": 5}]})}
+    assert chk.leaves(index, "core") == ["m1", "m2", "arc_easy"]
+    assert chk.leaves(index, "ai2_arc") == ["arc_challenge", "arc_easy"]
+    assert chk.leaves(index, "inline") == ["inline"]                         # inline member configs: as a whole
+    assert chk.leaves(index, "unknown") == ["unknown"]
+    old = {"g": {"type": "group", "task": ["t"]}, "t": {"type": "task"}}      # older lm-eval: dict entries
+    assert chk.leaves(old, "g") == ["t"]
+
+
+def test_check_datasets_main(tmp_path):
+    pkg = tmp_path / "pkg" / "lm_eval"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "tasks.py").write_text(FAKE_LM_EVAL)
+    data = tmp_path / "data"
+    (data / "Rowan" / "hellaswag" / ".hfd").mkdir(parents=True)
+    (data / "cais" / "mmlu").mkdir(parents=True)
+    (data / "cais" / "mmlu" / "all.parquet.aria2").write_text("")             # unfinished download
+    env = {k: v for k, v in os.environ.items() if k not in SCRUB}
+    env.update(PYTHONPATH=str(tmp_path / "pkg"), HF_HUB_OFFLINE="1", HF_DATASETS_OFFLINE="1")
+    res = subprocess.run([sys.executable, str(REPO / "ladder/eval/check_datasets.py"), "--data-dir", str(data),
+                          "--tasks", "hellaswag,social_iqa,mmlu,broken,nope"], env=env, capture_output=True, text=True)
+    out = res.stdout
+    assert res.returncode == 1, res.stderr
+    assert "[ OK ] hellaswag: Rowan/hellaswag, 7 eval docs" in out
+    assert "[MISS] social_iqa: lighteval/siqa is not under" in out
+    assert "[ OK ] mmlu/mmlu_a: cais/mmlu/mmlu_a" in out and "[ OK ] mmlu/mmlu_b" in out
+    assert "[FAIL] broken: RuntimeError: Dataset scripts are no longer supported" in out and "refs/convert" in out
+    assert "[UNKN] nope" in out
+    assert "[PART] cais/mmlu: hfd.sh download unfinished: 1 partial file(s)" in out
+    assert 'EVAL_DATASETS="lighteval/siqa cais/mmlu" bash ladder/eval/download_datasets.sh' in out
+    assert "3 task(s) OK, 1 missing, 2 failed, 1 unfinished" in out
+
+
+def test_check_datasets_sh_plan(tmp_path):
+    res = run_script("ladder/eval/check_datasets.sh", {"VLLM_PYTHON": "/venv/bin/python", "EVAL_DATA_DIR": tmp_path})
+    assert res.returncode == 0, res.stderr
+    cmd = shlex.split(plus_lines(res.stdout)[0])
+    assert cmd[:2] == ["/venv/bin/python", f"{REPO}/ladder/eval/check_datasets.py"]
+    assert cmd[cmd.index("--tasks") + 1] == SMALL and cmd[cmd.index("--data-dir") + 1] == str(tmp_path)
+    res = run_script("ladder/eval/check_datasets.sh", {"TASK_SET": "core", "EVAL_DATA_DIR": tmp_path})
+    assert ",mmlu,race," in plus_lines(res.stdout)[0]
+    assert run_script("ladder/eval/check_datasets.sh", {"EVAL_DATA_DIR": tmp_path / "x"}, dry=False).returncode == 1

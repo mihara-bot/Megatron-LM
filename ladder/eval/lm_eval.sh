@@ -10,7 +10,8 @@
 #   MODEL        one or more HF directories, space-separated; globs are expanded when the job runs, so a pattern
 #                such as ".../hf/*_iter*" picks up every export present by then (in version order)
 # Optional:
-#   TASK_SET     task preset, each one adding to the previous (ladder/eval/download_datasets.sh fetches their data):
+#   TASK_SET     task preset (ladder/eval/task_sets.sh), each one adding to the previous; their data: ladder/eval/
+#                download_datasets.sh, checked by ladder/eval/check_datasets.sh:
 #                  small (default)  hellaswag arc_easy arc_challenge piqa winogrande openbookqa sciq boolq
 #                                   lambada_openai copa social_iqa commonsense_qa   (log-likelihood, 0-shot)
 #                  core      + mmlu race wikitext xstorycloze_en truthfulqa_mc2 mmlu_continuation logiqa ceval-valid
@@ -58,28 +59,14 @@ BATCH_SIZE=${BATCH_SIZE:-auto}
 GPU_MEM=${GPU_MEM:-0.85}
 SEED=${SEED:-1234}
 
-SMALL_TASKS=hellaswag,arc_easy,arc_challenge,piqa,winogrande,openbookqa,sciq,boolq,lambada_openai,copa,social_iqa,commonsense_qa
-CORE_TASKS=$SMALL_TASKS,mmlu,race,wikitext,xstorycloze_en,truthfulqa_mc2,mmlu_continuation,logiqa,ceval-valid,cmmlu
-EXTENDED_TASKS=$CORE_TASKS,agieval_en,agieval_cn,leaderboard_mmlu_pro,leaderboard_bbh,leaderboard_gpqa,leaderboard_musr,triviaqa,nq_open,gsm8k
-ALL_TASKS=$EXTENDED_TASKS,gsm8k_cot,minerva_math,bbh_cot_fewshot,mmlu_pro,drop,humaneval,mbpp
-case "$TASK_SET" in
-    small)    SET_TASKS=$SMALL_TASKS ;;
-    core)     SET_TASKS=$CORE_TASKS ;;
-    extended) SET_TASKS=$EXTENDED_TASKS ;;
-    all)      SET_TASKS=$ALL_TASKS ;;
-    *) echo "TASK_SET must be small, core, extended or all, got $TASK_SET" >&2; exit 1 ;;
-esac
+source ladder/eval/task_sets.sh            # -> TASKS, TASK_SET_NAME (presets there)
 case "$TOKENS" in auto | eos | default) ;; *) echo "TOKENS must be auto, eos or default, got $TOKENS" >&2; exit 1 ;; esac
 
 SUFFIX=""
-if [ -n "${TASKS:-}" ]; then
-    TASKS=${TASKS// /}
+if [ "$TASK_SET_NAME" = custom ]; then
     SUFFIX+="_${TASKS//,/_}"
-    TASK_SET_NAME=custom
-else
-    TASKS=$SET_TASKS
-    TASK_SET_NAME=$TASK_SET
-    if [ "$TASK_SET" != small ]; then SUFFIX+="_$TASK_SET"; fi
+elif [ "$TASK_SET" != small ]; then
+    SUFFIX+="_$TASK_SET"
 fi
 if [ -n "${NUM_FEWSHOT:-}" ]; then SUFFIX+="_${NUM_FEWSHOT}shot"; fi
 if [ -n "${LIMIT:-}" ]; then SUFFIX+="_limit${LIMIT}"; fi

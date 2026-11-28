@@ -21,10 +21,13 @@
 #                                           extracted and a README with one config per subject is written
 #   Idavidrein/gpqa                         gated: pass --hf_username U --hf_token T
 # Re-running resumes unfinished downloads (hfd.sh keeps its state in <repo>/.hfd) and rewrites the generated READMEs.
+# The repo lists below follow one lm-eval version; ladder/eval/check_datasets.sh checks them against the installed one
+# (it loads every task offline) and prints the EVAL_DATASETS="..." call for anything missing or unfinished.
 #
 # Repos by the task set that first needs them (TASK_SET downloads its own and those of the sets before it):
 #   small     Rowan/hellaswag allenai/ai2_arc baber/piqa allenai/winogrande allenai/openbookqa allenai/sciq
-#             aps/super_glue (boolq, copa) EleutherAI/lambada_openai allenai/social_i_qa tau/commonsense_qa
+#             aps/super_glue (boolq, copa) EleutherAI/lambada_openai tau/commonsense_qa, and for social_iqa both
+#             allenai/social_i_qa and lighteval/siqa (which one a task reads depends on the lm-eval version)
 #   core      cais/mmlu EleutherAI/race EleutherAI/wikitext_document_level juletxara/xstory_cloze
 #             truthfulqa/truthful_qa EleutherAI/logiqa ceval/ceval-exam haonan-li/cmmlu
 #             (mmlu_continuation reads cais/mmlu)
@@ -60,7 +63,7 @@ for name in aqua-rat gaokao-biology gaokao-chemistry gaokao-chinese gaokao-engli
         sat-en-without-passage sat-math; do
     AGIEVAL+=" hails/agieval-$name"
 done
-SMALL_DATASETS="Rowan/hellaswag allenai/ai2_arc baber/piqa allenai/winogrande allenai/openbookqa allenai/sciq aps/super_glue EleutherAI/lambada_openai allenai/social_i_qa tau/commonsense_qa"
+SMALL_DATASETS="Rowan/hellaswag allenai/ai2_arc baber/piqa allenai/winogrande allenai/openbookqa allenai/sciq aps/super_glue EleutherAI/lambada_openai allenai/social_i_qa lighteval/siqa tau/commonsense_qa"
 CORE_DATASETS="cais/mmlu EleutherAI/race EleutherAI/wikitext_document_level juletxara/xstory_cloze truthfulqa/truthful_qa EleutherAI/logiqa ceval/ceval-exam haonan-li/cmmlu"
 EXTENDED_DATASETS="$AGIEVAL TIGER-Lab/MMLU-Pro SaylorTwift/bbh Idavidrein/gpqa TAUR-Lab/MuSR mandarjoshi/trivia_qa google-research-datasets/nq_open openai/gsm8k"
 ALL_DATASETS="EleutherAI/hendrycks_math EleutherAI/drop openai/openai_humaneval google-research-datasets/mbpp"

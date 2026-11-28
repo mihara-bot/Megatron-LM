@@ -6,7 +6,7 @@ export runs in the Megatron environment, the eval in the vLLM one.
 
 | step | script | env | GPUs | output |
 |---|---|---|---|---|
-| datasets (once) | `ladder/eval/download_datasets.sh` | any python3 | 0 | `$EVAL_DATA_DIR/<org>/<name>` |
+| datasets (once) | `ladder/eval/download_datasets.sh`, then `check_datasets.sh` | any python3 / vLLM | 0 | `$EVAL_DATA_DIR/<org>/<name>` |
 | lm-eval install (once) | `pip install -e` (below) | vLLM | 0 | lm_eval in the vLLM venv |
 | export | `ladder/eval/export.sh` | Megatron | 1 | `<run>/hf/<tag>_iter<N>` |
 | eval | `ladder/eval/lm_eval.sh` | vLLM | 1 | `logs/pretrain_evals/<run>/<tag>_iter<N>/results.json`, `summary.jsonl` |
@@ -21,6 +21,16 @@ repos through hf-mirror with `hfd.sh` (taken from next to the repo, or set `HFD`
 
 ```bash
 TASK_SET=small bash ladder/eval/download_datasets.sh   # what the default task set reads; no TASK_SET = every set
+```
+
+Then check the result against the installed lm-eval, which decides which repo each task reads (lm-eval versions
+differ: social_iqa reads `allenai/social_i_qa` in one, `lighteval/siqa` in another). `check_datasets.sh` builds every
+task offline from that directory, as lm-eval does when it evaluates. It prints OK / MISS / FAIL per task and PART
+for downloads hfd.sh did not finish, then the `EVAL_DATASETS="..." bash ladder/eval/download_datasets.sh` call for
+what is missing. No GPU is needed. Rerun it after every lm-eval update:
+
+```bash
+VLLM_PYTHON=/fast/users/zhuangxinlin/envs/vllm/bin/python bash ladder/eval/check_datasets.sh   # TASK_SET=core ... likewise
 ```
 
 lm-eval goes into the vLLM venv built by `ladder/env/setup_vllm_env.sh`, never into the Megatron venv. Install it
