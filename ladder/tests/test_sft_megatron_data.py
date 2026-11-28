@@ -126,3 +126,53 @@ def test_megatron_items_match_pipeline_encoding(prepared):
         assert int(item["original_seq_len"]) == len(ids) - 1
         supervised += len(r) + 1
     assert supervised == 2 * stats["supervised_tokens_per_epoch"]
+
+
+def test_datasets_cache_built_once_then_only_read(tmp_path):
+    """ladder/sft/datasets_cache.py, as train_sft.sh runs it: concurrent jobs end up on one complete cache, and a
+    rank's VarlenLowLevelDataset (HF_DATASETS_CACHE = that cache) reads it without converting anything again."""
+    pytest.importorskip("datasets")
+    import subprocess
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    import datasets_cache
+
+    def write(path, n):
+        pq.write_table(pa.table({"prompt": [f"q{i}" for i in range(n)], "response": [f"a{i} " * 40 for i in range(n)],
+                                 "sample_id": list(range(n)), "epoch": [0] * n}), path, row_group_size=500)
+        return str(path)
+
+    paths = [write(tmp_path / "train.parquet", 3000), write(tmp_path / "valid.parquet", 50)]
+    root = tmp_path / "cache"
+    env = {**os.environ, "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"}
+    cmd = [sys.executable, str(REPO / "ladder/sft/datasets_cache.py"), "--root", str(root), *paths]
+    procs = [subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+             for _ in range(4)]
+    outs = [p.communicate() for p in procs]
+    assert [p.returncode for p in procs] == [0] * 4, [err for _, err in outs]
+    dirs = {out.strip() for out, _ in outs}
+    assert len(dirs) == 1
+    final = Path(dirs.pop())
+    assert final.parent == root and (final / datasets_cache.COMPLETE).is_file()
+    assert [x.name for x in root.iterdir()] == [final.name]          # no .tmp-* left behind
+    meta = json.loads((final / datasets_cache.COMPLETE).read_text())
+    assert list(meta["rows"].values()) == [3000, 50]
+
+    before = datasets_cache.snapshot(final)
+    code = ("import sys; from megatron.training.datasets.varlen_dataset import VarlenLowLevelDataset as V; "
+            "print(len(V(sys.argv[1])))")
+    for path, n in zip(paths, [3000, 50]):
+        res = subprocess.run([sys.executable, "-c", code, path], capture_output=True, text=True,
+                             env={**env, "HF_DATASETS_CACHE": str(final), "PYTHONPATH": str(REPO)})
+        assert res.returncode == 0, res.stderr
+        assert int(res.stdout.split()[-1]) == n
+    assert datasets_cache.snapshot(final) == before                  # read, not converted again
+
+    again = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    assert again.returncode == 0 and again.stdout.strip() == str(final) and "reusing" in again.stderr
+    write(tmp_path / "valid.parquet", 51)                             # re-prepared data: a new cache
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() != str(final) and (Path(res.stdout.strip()) / datasets_cache.COMPLETE).is_file()

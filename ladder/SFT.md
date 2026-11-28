@@ -158,7 +158,9 @@ UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple \
 - `python -m pytest ladder/tests/test_sft_megatron_data.py -p no:cacheprovider -o addopts=""` (CPU, Megatron env with
   the ladder tokenizers): prepare_sft_data.py end to end on synthetic rows, then Megatron's VarlenDataset + identity
   SFTTokenizer on its output, item by item against the pipeline's example (tokens, targets, loss mask), Llama3 and
-  Qwen3 tokenizers.
+  Qwen3 tokenizers; and `ladder/sft/datasets_cache.py` (the `datasets` Arrow cache train_sft.sh builds once, before
+  the ranks start, so that jobs started together do not overwrite each other's cache): concurrent builders end on
+  one complete cache that a rank reads without converting again.
 - `bash ladder/sft/smoke_sft.sh` (one node, see run_sft.sh): 4000 rows x 2 epochs (~125 steps) from a real ladder
   checkpoint, export of every checkpoint, a quick vLLM eval, then `ladder/sft/check_sft_smoke.py`: the run
   finished, the loss is finite, starts low (pretrained weights loaded) and goes down, LR peaks and decays to 0, the

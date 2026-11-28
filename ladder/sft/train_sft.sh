@@ -193,10 +193,17 @@ if [ "$NODE_RANK" = 0 ]; then
     cp "$STATS" "$SFT_DIR/sft_data_stats.json"
     if [ -n "${EVAL_GBS:-}" ]; then cp "$VALID_STATS" "$SFT_DIR/sft_valid_stats.json"; fi
 fi
-# VarlenDataset loads the parquet through `datasets`, which converts it to an Arrow cache once and memory-maps
-# it; keep that cache on shared storage and never reach for the Hub (the cluster cannot).
-export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-$OUT_ROOT/hf_datasets_cache}
+# VarlenDataset loads each parquet through `datasets`, which converts it to Arrow files under HF_DATASETS_CACHE on
+# first use and memory-maps them. All ranks do that at once and datasets' file lock does not hold across jobs on the
+# shared filesystem (SFT jobs started together overwrote each other's files: "Expected to be able to read N bytes
+# for message body, got M"), so one process builds the cache first, privately, and renames it into place
+# (ladder/sft/datasets_cache.py); the ranks only read it. Never reach for the Hub (the cluster cannot).
 export HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1
+PARQUETS=("$DATA")
+if [ -n "${EVAL_GBS:-}" ]; then PARQUETS+=("$VALID"); fi
+DATASETS_CACHE=$(python ladder/sft/datasets_cache.py --root "${HF_DATASETS_CACHE:-$OUT_ROOT/hf_datasets_cache}" \
+    "${PARQUETS[@]}")
+export HF_DATASETS_CACHE=$DATASETS_CACHE
 
 exec python -m torch.distributed.run \
     --nnodes "$NNODES" --node-rank "$NODE_RANK" --nproc-per-node "$GPUS_PER_NODE" \
